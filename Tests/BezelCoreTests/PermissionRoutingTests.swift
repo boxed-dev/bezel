@@ -45,14 +45,14 @@ struct PermissionRoutingTests {
         #expect(!PermissionRouting.isBlocking(kind))
     }
 
-    @Test func geminiPreToolUseIsPermission() {
+    @Test func geminiPreToolUseIsEventInClaudeOnlyScope() {
         let kind = PermissionRouting.routeKind(
             hookEventName: "PreToolUse",
             toolName: "Bash",
             source: "gemini",
             question: nil
         )
-        #expect(kind == .permission)
+        #expect(kind == .event)
     }
 
     @Test func sessionStartIsEvent() {

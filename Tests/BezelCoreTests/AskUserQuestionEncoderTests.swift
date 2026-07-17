@@ -56,6 +56,28 @@ struct AskUserQuestionEncoderTests {
         }
     }
 
+    /// M3: resolve path must echo original tool_input.questions (extra keys survive).
+    @Test func echoesOriginalQuestionsIncludingExtraKeys() throws {
+        let original: [[String: Any]] = [
+            [
+                "question": "Target?",
+                "header": "T",
+                "options": [["label": "Prod", "description": "p"]],
+                "multiSelect": false,
+                "customField": "must-survive",
+            ],
+        ]
+        let data = try AskUserQuestionEncoder.encode(
+            questions: original,
+            answers: [.init(question: "Target?", answer: "Prod")]
+        )
+        let root = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        let updated = (root?["hookSpecificOutput"] as? [String: Any])?["updatedInput"] as? [String: Any]
+        let echoed = updated?["questions"] as? [[String: Any]]
+        #expect(echoed?.first?["customField"] as? String == "must-survive")
+        #expect(echoed?.first?["question"] as? String == "Target?")
+    }
+
     private func loadFixture(_ name: String) throws -> Data {
         if let url = Bundle.module.url(forResource: name, withExtension: "json", subdirectory: "decisions") {
             return try Data(contentsOf: url)

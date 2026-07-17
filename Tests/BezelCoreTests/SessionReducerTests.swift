@@ -34,11 +34,18 @@ struct SessionReducerTests {
         #expect(s.phase == .planReview)
     }
 
-    @Test func stopGoesDone() throws {
+    @Test func stopGoesIdleKeepsSessionVisible() throws {
         var s = Session(id: SessionID("s1"), phase: .working)
         let env = try payload(#"{"hook_event_name":"Stop","session_id":"s1"}"#)
         s = SessionReducer.apply(session: s, envelope: env)
-        #expect(s.phase == .done)
+        #expect(s.phase == .idle)
+    }
+
+    @Test func stopDoesNotClearWaitingPermission() throws {
+        var s = Session(id: SessionID("s1"), phase: .waitingPermission)
+        let env = try payload(#"{"hook_event_name":"Stop","session_id":"s1"}"#)
+        s = SessionReducer.apply(session: s, envelope: env)
+        #expect(s.phase == .waitingPermission)
     }
 
     @Test func sessionEndGoesDone() throws {
@@ -59,6 +66,13 @@ struct SessionReducerTests {
         let env = try payload(#"{"hook_event_name":"PreToolUse","session_id":"s1","tool_name":"Bash"}"#)
         s = SessionReducer.apply(session: s, envelope: env)
         #expect(s.phase == .waitingPermission)
+    }
+
+    @Test func missingSessionIdUsesUnknown() throws {
+        let env = try payload(#"{"hook_event_name":"SessionStart","cwd":"/tmp"}"#)
+        let s = SessionReducer.seed(from: env)
+        #expect(s.id == SessionID.unknown)
+        #expect(s.id.rawValue == "unknown")
     }
 
     private func payload(_ json: String) throws -> HookPayload {
