@@ -9,17 +9,13 @@ public enum PermissionRouting {
         question: String?
     ) -> RouteKind {
         let event = HookEventName(raw: hookEventName)
-        let src = (source ?? "claude").lowercased()
 
         if event == .permissionRequest {
             return .permission
         }
 
-        // Gemini family uses PreToolUse as the permission gate.
-        if event == .preToolUse, isGeminiFamily(src) {
-            return .permission
-        }
-
+        // Claude-only Phase 1: PreToolUse blocks only for interactive tools.
+        // Gemini-family PreToolUse-as-permission is deferred to multi-agent phase.
         if event == .preToolUse {
             let tool = toolName ?? ""
             if tool == "AskUserQuestion" || tool == "ExitPlanMode" {
@@ -38,6 +34,7 @@ public enum PermissionRouting {
         kind != .event
     }
 
+    /// Retained for Phase 3 adapters; unused in Claude-only routing.
     public static func isGeminiFamily(_ source: String) -> Bool {
         source == "gemini" || source == "google-antigravity" || source == "antigravity"
     }

@@ -19,7 +19,13 @@ public enum SessionReducer {
             if next.title == nil, let cwd = next.cwd {
                 next.title = (cwd as NSString).lastPathComponent
             }
-        case .sessionEnd, .stop:
+        case .stop:
+            // Turn finished — keep session visible (idle), not gone.
+            // SessionEnd is the only true "remove from list" event.
+            if !isWaiting(next.phase) {
+                next.phase = .idle
+            }
+        case .sessionEnd:
             next.phase = .done
         case .preToolUse:
             if envelope.toolName == "AskUserQuestion" {
@@ -45,8 +51,6 @@ public enum SessionReducer {
 
         if envelope.routeKind == .question {
             next.phase = .waitingQuestion
-        } else if envelope.routeKind == .permission, event == .permissionRequest {
-            // keep permission / planReview from above
         }
 
         return next
@@ -60,7 +64,7 @@ public enum SessionReducer {
     }
 
     public static func seed(from envelope: HookPayload, now: Date = Date()) -> Session {
-        let sid = SessionID(envelope.sessionID ?? UUID().uuidString)
+        let sid = SessionID(envelope.sessionID ?? SessionID.unknown.rawValue)
         let source = AgentSource(rawValue: envelope.source ?? "claude") ?? .claude
         let base = Session(id: sid, source: source, phase: .idle, cwd: envelope.cwd, updatedAt: now)
         return apply(session: base, envelope: envelope, now: now)

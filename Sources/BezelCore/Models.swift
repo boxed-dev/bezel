@@ -81,6 +81,8 @@ public struct SessionID: Hashable, Codable, Sendable, RawRepresentable {
     public let rawValue: String
     public init(rawValue: String) { self.rawValue = rawValue }
     public init(_ value: String) { self.rawValue = value }
+    /// Canonical id when the agent omits session_id (never invent a UUID).
+    public static let unknown = SessionID("unknown")
 }
 
 public struct Session: Identifiable, Codable, Sendable, Hashable {
@@ -111,68 +113,5 @@ public struct Session: Identifiable, Codable, Sendable, Hashable {
         self.lastTool = lastTool
         self.terminal = terminal
         self.updatedAt = updatedAt
-    }
-}
-
-public struct IslandEnvelope: Codable, Sendable {
-    public var hookEventName: String
-    public var sessionID: String?
-    public var toolName: String?
-    public var cwd: String?
-    public var source: String?
-    public var question: String?
-    public var raw: [String: AnyCodable]
-
-    public enum CodingKeys: String, CodingKey {
-        case hookEventName = "hook_event_name"
-        case sessionID = "session_id"
-        case toolName = "tool_name"
-        case cwd
-        case source = "_source"
-        case question
-    }
-
-    public init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        hookEventName = try c.decodeIfPresent(String.self, forKey: .hookEventName)
-            ?? (try? decoder.container(keyedBy: AltKeys.self).decode(String.self, forKey: .hookEventName))
-            ?? "Unknown"
-        sessionID = try c.decodeIfPresent(String.self, forKey: .sessionID)
-        toolName = try c.decodeIfPresent(String.self, forKey: .toolName)
-        cwd = try c.decodeIfPresent(String.self, forKey: .cwd)
-        source = try c.decodeIfPresent(String.self, forKey: .source)
-        question = try c.decodeIfPresent(String.self, forKey: .question)
-        raw = [:]
-    }
-
-    public func encode(to encoder: Encoder) throws {
-        var c = encoder.container(keyedBy: CodingKeys.self)
-        try c.encode(hookEventName, forKey: .hookEventName)
-        try c.encodeIfPresent(sessionID, forKey: .sessionID)
-        try c.encodeIfPresent(toolName, forKey: .toolName)
-        try c.encodeIfPresent(cwd, forKey: .cwd)
-        try c.encodeIfPresent(source, forKey: .source)
-        try c.encodeIfPresent(question, forKey: .question)
-    }
-
-    private enum AltKeys: String, CodingKey {
-        case hookEventName
-    }
-}
-
-/// Minimal type-erased JSON value for passthrough.
-public struct AnyCodable: Codable, Sendable, Hashable {
-    public let value: String
-    public init(_ value: String) { self.value = value }
-    public init(from decoder: Decoder) throws {
-        let c = try decoder.singleValueContainer()
-        if let s = try? c.decode(String.self) { value = s }
-        else if let i = try? c.decode(Int.self) { value = String(i) }
-        else if let b = try? c.decode(Bool.self) { value = String(b) }
-        else { value = "" }
-    }
-    public func encode(to encoder: Encoder) throws {
-        var c = encoder.singleValueContainer()
-        try c.encode(value)
     }
 }
