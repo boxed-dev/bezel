@@ -1,16 +1,25 @@
 import Foundation
 import BezelCore
 import Darwin
+import os.lock
 
 /// Unix-domain socket server. Must start before ConfigInstaller writes hooks.
 final class HookServer: @unchecked Sendable {
     private let store: SessionStore
-    private let queue = DispatchQueue(label: "app.bezel.hookserver")
+    private let blockingTimeout: TimeInterval
+    /// Accept loop only — never blocks on permission waits.
+    private let acceptQueue = DispatchQueue(label: "app.bezel.hookserver.accept")
+    /// Concurrent handlers so a second session can connect while one waits.
+    private let workQueue = DispatchQueue(label: "app.bezel.hookserver.work", attributes: .concurrent)
     private var listenFD: Int32 = -1
     private var acceptSource: DispatchSourceRead?
 
-    init(store: SessionStore) {
+    init(
+        store: SessionStore,
+        blockingTimeout: TimeInterval = IPCConstants.blockingRecvTimeoutSeconds
+    ) {
         self.store = store
+        self.blockingTimeout = blockingTimeout
     }
 
     func start() {
@@ -22,48 +31,13 @@ final class HookServer: @unchecked Sendable {
             return
         }
 
-        if FileManager.default.fileExists(atPath: path) {
-            try? FileManager.default.removeItem(atPath: path)
-        }
-
-        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
-        guard fd >= 0 else {
-            NSLog("Bezel: socket() failed")
-            return
-        }
-
-        var addr = sockaddr_un()
-        addr.sun_family = sa_family_t(AF_UNIX)
-        let pathBytes = path.utf8CString
-        withUnsafeMutablePointer(to: &addr.sun_path) { ptr in
-            ptr.withMemoryRebound(to: CChar.self, capacity: pathBytes.count) { dest in
-                for (i, b) in pathBytes.enumerated() { dest[i] = b }
-            }
-        }
-
-        let oldMask = umask(0o077)
-        let bindOK: Int32 = withUnsafePointer(to: &addr) { ptr in
-            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                Darwin.bind(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
-            }
-        }
-        umask(oldMask)
-
-        guard bindOK == 0 else {
-            NSLog("Bezel: bind(\(path)) failed errno=\(errno)")
-            close(fd)
-            return
-        }
-
-        chmod(path, 0o700)
-        guard listen(fd, 32) == 0 else {
-            NSLog("Bezel: listen failed")
-            close(fd)
+        guard let fd = UnixSocket.bindListen(path: path) else {
+            NSLog("Bezel: bind/listen failed for \(path)")
             return
         }
 
         listenFD = fd
-        let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
+        let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: acceptQueue)
         source.setEventHandler { [weak self] in
             self?.acceptOne()
         }
@@ -85,15 +59,8 @@ final class HookServer: @unchecked Sendable {
     private func acceptOne() {
         let fd = listenFD
         guard fd >= 0 else { return }
-        var addr = sockaddr_un()
-        var len = socklen_t(MemoryLayout<sockaddr_un>.size)
-        let client = withUnsafeMutablePointer(to: &addr) { ptr in
-            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                accept(fd, $0, &len)
-            }
-        }
-        guard client >= 0 else { return }
-        queue.async { [weak self] in
+        guard let client = UnixSocket.acceptClient(listenFD: fd) else { return }
+        workQueue.async { [weak self] in
             self?.handle(clientFD: client)
         }
     }
@@ -101,24 +68,19 @@ final class HookServer: @unchecked Sendable {
     private func handle(clientFD: Int32) {
         defer { close(clientFD) }
 
-        var data = Data()
-        var buf = [UInt8](repeating: 0, count: 65_536)
-        while true {
-            let n = Darwin.read(clientFD, &buf, buf.count)
-            if n == 0 { break }
-            if n < 0 {
-                if errno == EINTR { continue }
-                break
-            }
-            data.append(contentsOf: buf[0..<n])
-            if data.count > IPCConstants.maxPayloadBytes {
-                writeAll(clientFD, DecisionJSON.permissionDeny(message: "Payload too large"))
-                return
-            }
+        let data = UnixSocket.readAll(
+            fd: clientFD,
+            limit: IPCConstants.maxPayloadBytes,
+            timeoutSeconds: IPCConstants.inboundReadTimeoutSeconds
+        )
+
+        if data.count > IPCConstants.maxPayloadBytes {
+            UnixSocket.writeAll(fd: clientFD, DecisionJSON.permissionDeny(message: "Payload too large"))
+            return
         }
 
         guard !data.isEmpty else {
-            writeAll(clientFD, DecisionJSON.emptyAck())
+            UnixSocket.writeAll(fd: clientFD, DecisionJSON.emptyAck())
             return
         }
 
@@ -126,7 +88,7 @@ final class HookServer: @unchecked Sendable {
         do {
             payload = try HookPayload.parse(data)
         } catch {
-            writeAll(clientFD, DecisionJSON.parseFailed())
+            UnixSocket.writeAll(fd: clientFD, DecisionJSON.parseFailed())
             return
         }
 
@@ -136,61 +98,144 @@ final class HookServer: @unchecked Sendable {
             DispatchQueue.main.async { [store] in
                 store.apply(envelope: payload)
             }
-            writeAll(clientFD, DecisionJSON.emptyAck())
+            UnixSocket.writeAll(fd: clientFD, DecisionJSON.emptyAck())
             return
         }
 
         let semaphore = DispatchSemaphore(value: 0)
-        let box = ResponseBox(DecisionJSON.permissionDeny(message: "Timed out"))
+        let enqueued = DispatchSemaphore(value: 0)
+        let box = LockedResponseBox(
+            DecisionJSON.deny(
+                for: kind,
+                hookEventName: payload.hookEventName,
+                message: "Timed out"
+            )
+        )
+        let sid = SessionID(payload.sessionID ?? SessionID.unknown.rawValue)
+        let key = DecisionKeyFactory.make(sessionID: sid, rawJSON: payload.rawJSON)
+        let attention = DecisionIngress.attention(for: payload)
+
+        // Optional smoke path: BEZEL_AUTO_DECISION=allow|deny (never for production users).
+        let auto = ProcessInfo.processInfo.environment["BEZEL_AUTO_DECISION"]?.lowercased()
 
         DispatchQueue.main.async { [store] in
             store.apply(envelope: payload)
-            let sid = SessionID(payload.sessionID ?? "unknown")
-            if kind == .permission {
+            defer { enqueued.signal() }
+
+            guard let attention else {
+                box.set(DecisionJSON.emptyAck())
+                semaphore.signal()
+                return
+            }
+
+            let resume: (Data) -> Void = { data in
+                box.set(data)
+                semaphore.signal()
+            }
+
+            if let auto, auto == "allow" || auto == "deny" {
+                let allow = auto == "allow"
+                let data: Data
+                switch attention.kind {
+                case .permission:
+                    if attention.hookEventName == "PreToolUse" {
+                        data = allow
+                            ? DecisionJSON.preToolUseAllow(reason: "Auto-allowed")
+                            : DecisionJSON.preToolUseDeny(reason: "Auto-denied")
+                    } else {
+                        data = allow ? DecisionJSON.permissionAllow() : DecisionJSON.permissionDeny()
+                    }
+                case .question:
+                    data = allow
+                        ? (try? AskUserQuestionEncoder.encode(
+                            questions: attention.questions.map { $0.asDictionary() },
+                            answers: attention.questions.map {
+                                AskUserQuestionAnswer(question: $0.question, answer: $0.options.first?.label ?? "yes")
+                            }
+                        )) ?? DecisionJSON.preToolUseDeny(reason: "Auto encode failed")
+                        : DecisionJSON.preToolUseDeny(reason: "Auto-denied")
+                case .planReview:
+                    if allow {
+                        data = (try? PlanReviewEncoder.approve(
+                            plan: attention.plan?.plan ?? "",
+                            planFilePath: attention.plan?.planFilePath,
+                            hookEventName: attention.hookEventName
+                        )) ?? DecisionJSON.preToolUseDeny(reason: "Auto encode failed")
+                    } else {
+                        data = PlanReviewEncoder.reject(hookEventName: attention.hookEventName)
+                    }
+                }
+                box.set(data)
+                semaphore.signal()
+                return
+            }
+
+            switch attention.kind {
+            case .planReview:
+                store.enqueuePlanReview(
+                    key: key,
+                    plan: attention.plan ?? PlanContent(plan: "", planFilePath: nil),
+                    hookEventName: attention.hookEventName,
+                    resume: resume
+                )
+            case .permission:
                 store.enqueuePermission(
-                    PendingPermission(
-                        sessionID: sid,
-                        toolName: payload.toolName,
-                        summary: payload.toolName.map { "Allow \($0)?" } ?? "Permission request",
-                        resume: { data in
-                            box.value = data
-                            semaphore.signal()
-                        }
-                    )
+                    key: key,
+                    toolName: attention.toolName,
+                    summary: attention.summary,
+                    hookEventName: attention.hookEventName,
+                    resume: resume
                 )
-            } else {
+            case .question:
                 store.enqueueQuestion(
-                    PendingQuestion(
-                        sessionID: sid,
-                        prompt: payload.question ?? "Agent question",
-                        resume: { data in
-                            box.value = data
-                            semaphore.signal()
-                        }
-                    )
+                    key: key,
+                    prompt: attention.prompt ?? attention.summary,
+                    questions: attention.questions,
+                    hookEventName: attention.hookEventName,
+                    rawQuestionsJSON: attention.rawQuestionsJSON,
+                    resume: resume
                 )
             }
         }
 
-        _ = semaphore.wait(timeout: .now() + IPCConstants.blockingRecvTimeoutSeconds)
-        writeAll(clientFD, box.value)
-    }
+        // Do not wait for the user before the decision is actually queued.
+        _ = enqueued.wait(timeout: .now() + 5)
 
-    private func writeAll(_ fd: Int32, _ data: Data) {
-        data.withUnsafeBytes { raw in
-            guard let base = raw.baseAddress else { return }
-            var written = 0
-            let total = data.count
-            while written < total {
-                let n = Darwin.write(fd, base.advanced(by: written), total - written)
-                if n <= 0 { break }
-                written += n
+        let waitResult = semaphore.wait(timeout: .now() + blockingTimeout)
+        if waitResult == .timedOut {
+            box.set(
+                DecisionJSON.deny(
+                    for: kind,
+                    hookEventName: payload.hookEventName,
+                    message: "Timed out"
+                )
+            )
+            DispatchQueue.main.async { [store] in
+                store.expireDecision(key: key, signalResume: false)
             }
         }
+        UnixSocket.writeAll(fd: clientFD, box.get())
     }
 }
 
-private final class ResponseBox: @unchecked Sendable {
-    var value: Data
-    init(_ value: Data) { self.value = value }
+/// Thread-safe response holder for the blocking wait path.
+private final class LockedResponseBox: @unchecked Sendable {
+    private var lock = os_unfair_lock_s()
+    private var value: Data
+
+    init(_ value: Data) {
+        self.value = value
+    }
+
+    func set(_ data: Data) {
+        os_unfair_lock_lock(&lock)
+        value = data
+        os_unfair_lock_unlock(&lock)
+    }
+
+    func get() -> Data {
+        os_unfair_lock_lock(&lock)
+        defer { os_unfair_lock_unlock(&lock) }
+        return value
+    }
 }

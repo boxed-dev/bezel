@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import BezelCore
+import Darwin
 
 @main
 struct BezelApp: App {
@@ -21,13 +22,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var notchController: NotchController?
     private var statusItem: NSStatusItem?
 
+    private var instanceLockFD: Int32 = -1
+
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Bridge closes without reading event acks; never die on SIGPIPE.
+        signal(SIGPIPE, SIG_IGN)
+
         NSApp.setActivationPolicy(.accessory)
+
+        // Single instance: flock + process check before unlinking the socket.
+        if let lockFD = SingleInstanceLock.tryAcquire() {
+            instanceLockFD = lockFD
+        } else {
+            NSLog("Bezel: another instance is already running — exiting")
+            NSApp.terminate(nil)
+            return
+        }
+        let others = NSRunningApplication.runningApplications(withBundleIdentifier: "app.bezel.macos")
+            .filter { !$0.isTerminated && $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
+        if !others.isEmpty {
+            NSLog("Bezel: found other running Bezel process — exiting")
+            NSApp.terminate(nil)
+            return
+        }
 
         // CRITICAL: listen before any hook install writes settings.
         let server = HookServer(store: store)
         hookServer = server
         server.start()
+
+        // Keep ~/.bezel bridge + hook script aligned with this app binary.
+        Task {
+            _ = await ConfigInstaller.syncInstalledBridgeIfNeeded()
+        }
 
         notchController = NotchController(store: store)
         notchController?.start()
