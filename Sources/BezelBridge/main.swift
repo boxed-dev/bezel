@@ -67,6 +67,7 @@ enum BezelBridgeMain {
             obj["cwd"] = FileManager.default.currentDirectoryPath
         }
 
+        // Capture live TTY + env hints for Jump (_iterm_session, _tty, TMUX_*, TERM_PROGRAM→_term_app, kitty, warp).
         var tty: String?
         var ttyBuf = [CChar](repeating: 0, count: 1024)
         if ttyname_r(STDIN_FILENO, &ttyBuf, ttyBuf.count) == 0 {
@@ -94,7 +95,13 @@ enum BezelBridgeMain {
         )
 
         if blocking {
-            FileHandle.standardOutput.write(response ?? DecisionJSON.permissionDeny(message: "Bezel unavailable"))
+            FileHandle.standardOutput.write(
+                response ?? DecisionJSON.deny(
+                    for: payload.routeKind,
+                    hookEventName: payload.hookEventName,
+                    message: "Bezel unavailable"
+                )
+            )
         }
         // Non-blocking: no stdout required
         exit(0)
@@ -148,13 +155,6 @@ enum UnixClient {
 
         _ = fcntl(fd, F_SETFL, flags) // back to blocking for IO
 
-        // Optional Gemini flush delay for blocking
-        if blocking, let src = (try? HookPayload.parse(data))?.source,
-           PermissionRouting.isGeminiFamily(src.lowercased())
-        {
-            usleep(250_000)
-        }
-
         var written = 0
         let bytes = [UInt8](data)
         while written < bytes.count {
@@ -169,21 +169,25 @@ enum UnixClient {
         shutdown(fd, SHUT_WR)
 
         if !blocking {
-            // Brief recv for ack, ignore failures
-            var buf = [UInt8](repeating: 0, count: 256)
-            _ = Darwin.read(fd, &buf, buf.count)
+            // Fire-and-forget: do not wait for ack (avoids 1s tax on every PostToolUse).
             return nil
         }
 
-        // Blocking recv until EOF
+        // Blocking recv until EOF — SO_RCVTIMEO enforces a real kernel timeout.
+        var timeout = timeval(
+            tv_sec: Int(IPCConstants.blockingRecvTimeoutSeconds),
+            tv_usec: 0
+        )
+        _ = setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+
         var response = Data()
         var buf = [UInt8](repeating: 0, count: 65_536)
-        let deadline = Date().addingTimeInterval(IPCConstants.blockingRecvTimeoutSeconds)
-        while Date() < deadline {
+        while true {
             let n = Darwin.read(fd, &buf, buf.count)
             if n == 0 { break }
             if n < 0 {
                 if errno == EINTR { continue }
+                // EAGAIN / EWOULDBLOCK: SO_RCVTIMEO fired
                 break
             }
             response.append(contentsOf: buf[0..<n])
