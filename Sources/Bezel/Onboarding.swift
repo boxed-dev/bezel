@@ -45,9 +45,7 @@ final class OnboardingWindowController {
 struct OnboardingRoot: View {
     let store: SessionStore
     let onDone: () -> Void
-    @State private var step = 0
-    @State private var launchAtLogin = true
-    @State private var configureStatus = ""
+    @State private var flow = OnboardingStateModel()
 
     private let accent = Color(red: 0.55, green: 0.64, blue: 0.71)
 
@@ -79,13 +77,13 @@ struct OnboardingRoot: View {
 
     @ViewBuilder
     private var group: some View {
-        switch step {
-        case 0: welcome
-        case 1: glance
-        case 2: connect
-        case 3: jump
-        case 4: stayReady
-        default: youreSet
+        switch flow.step {
+        case .welcome: welcome
+        case .glance: glance
+        case .connect: connect
+        case .jump: jump
+        case .stayReady: stayReady
+        case .youreSet: youreSet
         }
     }
 
@@ -124,11 +122,7 @@ struct OnboardingRoot: View {
                 subtitle: "You can change this later."
             )
             DetectedAgentsList()
-            if !configureStatus.isEmpty {
-                Text(configureStatus)
-                    .font(.system(size: 12))
-                    .foregroundStyle(accent)
-            }
+            configureStatusLabel
         }
     }
 
@@ -141,6 +135,22 @@ struct OnboardingRoot: View {
             Text("You can enable this later from Settings.")
                 .font(.system(size: 13))
                 .foregroundStyle(.tertiary)
+            // Keep Connect result visible after advance (esp. socket probe failure).
+            configureStatusLabel
+        }
+    }
+
+    @ViewBuilder
+    private var configureStatusLabel: some View {
+        if !flow.configureStatus.isEmpty {
+            let failed = flow.configureStatus.localizedCaseInsensitiveContains("failed")
+            Text(flow.configureStatus)
+                .font(.system(size: 12))
+                .foregroundStyle(
+                    failed
+                        ? Color(red: 0.85, green: 0.45, blue: 0.4)
+                        : accent
+                )
         }
     }
 
@@ -150,8 +160,14 @@ struct OnboardingRoot: View {
                 "Keep Bezel available when you start your Mac.",
                 subtitle: "It stays in the menu bar — quiet until needed."
             )
-            Toggle("Open at login", isOn: $launchAtLogin)
-                .toggleStyle(.switch)
+            Toggle(
+                "Open at login",
+                isOn: Binding(
+                    get: { flow.launchAtLogin },
+                    set: { dispatch(.setLaunchAtLogin($0)) }
+                )
+            )
+            .toggleStyle(.switch)
         }
     }
 
@@ -173,12 +189,26 @@ struct OnboardingRoot: View {
 
     private var footer: some View {
         HStack {
-            if step > 0 && step < 5 {
-                Button("Back") { withAnimation(.easeOut(duration: 0.3)) { step -= 1 } }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
+            if flow.step != .welcome && flow.step != .youreSet {
+                Button("Back") {
+                    withAnimation(.easeOut(duration: 0.3)) {
+                        dispatch(.backTapped)
+                    }
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
             }
             Spacer()
+            if flow.step == .jump {
+                Button("Skip for now") {
+                    withAnimation(.easeOut(duration: 0.3)) {
+                        dispatch(.accessibilitySkipped)
+                    }
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .padding(.trailing, 12)
+            }
             Button(primaryLabel) {
                 advance()
             }
@@ -188,39 +218,50 @@ struct OnboardingRoot: View {
     }
 
     private var primaryLabel: String {
-        switch step {
-        case 0: "Continue"
-        case 2: "Connect"
-        case 3: "Enable Accessibility"
-        case 5: "Done"
+        switch flow.step {
+        case .welcome: "Continue"
+        case .connect: "Connect"
+        case .jump: "Enable Accessibility"
+        case .youreSet: "Done"
         default: "Continue"
         }
     }
 
     private func advance() {
-        switch step {
-        case 2:
-            configureStatus = "Configuring Claude Code…"
-            Task {
-                let ok = await ConfigInstaller.installClaudeHooks()
-                configureStatus = ok ? "Ready." : "Claude Code not found — skipped."
-                try? await Task.sleep(for: .milliseconds(500))
-                withAnimation(.easeOut(duration: 0.3)) { step = 3 }
+        withAnimation(.easeOut(duration: 0.3)) {
+            dispatch(.continueTapped)
+        }
+        runEffects()
+    }
+
+    private func dispatch(_ intent: OnboardingIntent) {
+        flow = OnboardingFlow.reduce(state: flow, intent: intent)
+    }
+
+    private func runEffects() {
+        let effects = flow.effects
+        for effect in effects {
+            switch effect {
+            case .installHooks:
+                Task {
+                    let result = await ConfigInstaller.installClaudeHooks()
+                    withAnimation(.easeOut(duration: 0.3)) {
+                        dispatch(.connectFinished(success: result.ok, status: result.message))
+                    }
+                }
+            case .openAccessibilitySettings:
+                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+                    NSWorkspace.shared.open(url)
+                }
+            case .applyLaunchAtLogin(let enabled):
+                do {
+                    try LaunchAtLogin.setEnabled(enabled)
+                } catch {
+                    // SMAppService may fail until Bezel is installed as a .app under /Applications.
+                }
+            case .complete:
+                onDone()
             }
-        case 3:
-            // Open Accessibility pane; do not block.
-            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
-                NSWorkspace.shared.open(url)
-            }
-            withAnimation(.easeOut(duration: 0.3)) { step = 4 }
-        case 4:
-            // Login item — SMAppService in later polish; store preference for now.
-            UserDefaults.standard.set(launchAtLogin, forKey: "bezel.launchAtLogin")
-            withAnimation(.easeOut(duration: 0.3)) { step = 5 }
-        case 5:
-            onDone()
-        default:
-            withAnimation(.easeOut(duration: 0.3)) { step += 1 }
         }
     }
 
@@ -265,8 +306,9 @@ struct DetectedAgentsList: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             agentRow("Claude Code", found: FileManager.default.fileExists(atPath: NSHomeDirectory() + "/.claude"))
-            agentRow("Codex", found: FileManager.default.fileExists(atPath: NSHomeDirectory() + "/.codex"))
-            agentRow("Cursor", found: FileManager.default.fileExists(atPath: NSHomeDirectory() + "/.cursor"))
+            Text("More agents later.")
+                .font(.system(size: 11))
+                .foregroundStyle(.tertiary)
         }
     }
 
