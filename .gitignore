@@ -1,7 +1,21 @@
+# SwiftPM
 .build/
 .swiftpm/
+Package.resolved.bak
+
+# Xcode
 *.xcodeproj
 DerivedData/
-.DS_Store
-*.dmg
 xcuserdata/
+
+# Local artifacts
+/dist/
+.scratch/
+*.sock
+*.dmg
+.DS_Store
+
+# Secrets
+.env
+.env.*
+*.pem
