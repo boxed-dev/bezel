@@ -16,12 +16,12 @@ Ship **Phase 1 vertical slice**: Claude Code → Bezel notch → Allow/Deny + As
 |------|-------|
 | Scaffold / build / DynamicNotchKit | ✅ |
 | S1 Routing, S2 Normalizer, S3 Payload | ✅ 8 tests |
-| HookServer + bridge + SessionStore (inline logic) | ✅ first cut, **not extracted** |
+| HookServer + bridge + SessionStore | ✅ DecisionIngress + SessionReducer; HookServer I/O + wait |
 | DecisionJSON | ✅ minimal, **needs golden fixtures N4** |
 | ConfigInstaller | ✅ writes disk, **merger not pure N7** |
 | Onboarding UI | ✅, **flow not pure N14** |
 | AskUserQuestion | ❌ |
-| Socket e2e | ❌ |
+| Socket e2e | ✅ UnixSocket helpers + roundtrip suite |
 | Terminal jump | ❌ |
 
 ---
@@ -151,3 +151,21 @@ swift test          # every red/green
 swift build
 ./scripts/run-bezel.sh
 ```
+
+---
+
+## Sprint D — Correctness DAG (executed)
+
+Follow the fix plan nodes F0–F24. Highlights:
+
+| Node | Deliverable |
+|------|-------------|
+| F2/F3 | Lifecycle hooks + safe merger identity |
+| F8/F9/F12/F15 | Timeout model + queue reap + store expire |
+| F10/F11/F14 | Shared UnixSocket + inbound read timeout + e2e |
+| F16 | Non-blocking bridge no-recv |
+| F17–F19 | Observation notch, onboarding skip, single instance |
+| F20/F21 | wezterm activateOnly; dead API removal |
+
+Commands: `swift test` · `swift build` · `./scripts/run-bezel.sh`
+

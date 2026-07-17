@@ -92,7 +92,7 @@ Visual: near-black `#07080A`, frosted glass, steel-cyan accent `#8BA3B5`, SF Pro
 - [x] ConfigInstaller → `~/.claude/settings.json` + `~/.bezel/` (first cut)
 - [x] Permission Allow/Deny from notch (wired)
 - [ ] AskUserQuestion answers (UI + JSON)
-- [x] SessionStart/End + Pre/PostToolUse status (store apply)
+- [x] SessionStart/End + Stop + UserPromptSubmit + Pre/PostToolUse (merger + reducer + store apply)
 - [x] 6-screen onboarding (first cut)
 - [ ] Jump: iTerm reveal + Terminal tty + Ghostty (Warp/Cursor degrade)
 
@@ -131,3 +131,17 @@ Visual: near-black `#07080A`, frosted glass, steel-cyan accent `#8BA3B5`, SF Pro
 - 26 agents on day one
 - Electron / Tauri
 - Forking CodeIsland wholesale (patterns only)
+
+---
+
+## Sprint D — Correctness (post Phase 1 wiring)
+
+See `docs/TDD-DAG.md` §Sprint D. Critical fixes shipped in Core:
+
+- Lifecycle hooks registered (`SessionEnd`, `Stop`, `UserPromptSubmit`) so sessions can leave `.working`
+- Merger no longer deletes foreign AskUserQuestion hooks; Bezel identity is path-exact
+- HookServer: inbound read timeout, blocking wait 600s, timeout reaps decision queue, locked response box
+- Bridge: no recv on fire-and-forget events; Claude-only routing (no Gemini gate)
+- Session identity: missing `session_id` → `"unknown"` (never a fresh UUID)
+- Single-instance flock before socket bind
+

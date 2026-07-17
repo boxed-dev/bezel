@@ -27,3 +27,8 @@
 **ClaudeSettingsMerger** — Pure merge of Bezel hook entries into Claude `settings.json` data without touching the filesystem.
 
 **TerminalJumpPlan** — Pure choice of how to focus a session’s terminal given a `TerminalHint`.
+
+**SessionID.unknown** — Canonical session id (`"unknown"`) when the agent omits `session_id`. Never invent a random UUID per event.
+
+**DecisionTimeout** — Pure deny payload builder for timed-out or superseded queue entries.
+

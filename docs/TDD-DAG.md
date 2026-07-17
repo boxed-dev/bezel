@@ -252,3 +252,52 @@ See `docs/PLAN.md` Acceptance section. Gate for “Phase 1 done.”
 - SSH remote hooks
 - Paywall / accounts
 - Snapshot UI tests
+
+---
+
+## 8. Sprint D — Correctness DAG (post Phase 1)
+
+Phase 1 left several production bugs behind a green suite. Sprint D closes them with the same TDD rules.
+
+### Critical path
+
+```
+F2 lifecycle hooks → F3 merger safety → F8 timeouts → F9 expire pure → F12 server reap → F15 store → F24 smoke
+```
+
+### Node index
+
+| ID | Issue | Seam / area |
+|----|-------|-------------|
+| F0 | Orphans / gitignore | hygiene |
+| F1 | Session identity `"unknown"` | S5 seed |
+| F2 | Register SessionEnd/Stop/UserPromptSubmit | S7 merger |
+| F3 | No foreign hook kill; exact Bezel identity | S7 |
+| F4 | Full JSON escape via JSONSerialization | S4 |
+| F5 | Plan review PermissionRequest shape | S4/S6 |
+| F6 | Dead reducer branch | S5 |
+| F7 | Claude-only routing | S1 |
+| F8 | blocking 600s + inbound 5s | IPCConstants |
+| F9 | `DecisionTimeout.denyData` | pure |
+| F10 | `UnixSocket` shared helpers | Core Darwin |
+| F11 | Inbound read timeout | HookServer |
+| F12 | Timeout reap + locked response box | HookServer |
+| F13 | `DecisionIngress` | pure |
+| F14 | Socket e2e on shared helpers | S8 |
+| F15 | `expireDecision` + hint reuse | SessionStore |
+| F16 | Bridge no-recv events | bridge |
+| F17 | Observation notch (no 400ms poll) | UI |
+| F18 | Onboarding Jump skip | S11 UI |
+| F19 | Single-instance flock | app |
+| F20 | wezterm → activateOnly | S10 |
+| F21 | Delete IslandEnvelope / legacy mappers | hygiene |
+| F22 | Docs truth | docs |
+| F23 | Packaging category | plist |
+| F24 | Full suite + Claude live smoke | ship |
+
+### DoD
+
+- Sessions can return to `activeCount == 0` after SessionEnd/Stop
+- Timed-out permission never leaves a live notch card
+- `swift test` green; merger cannot delete user hooks by matcher text or `"bezel"` substring
+
