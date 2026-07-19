@@ -24,21 +24,26 @@ struct OnboardingFlowTests {
         #expect(s.configureStatus == "Ready.")
     }
 
-    @Test func connectFinishedFailureSurfacesStatus() {
+    @Test func connectFinishedFailureStaysOnConnect() {
         var s = OnboardingStateModel(step: .connect)
         s = OnboardingFlow.reduce(
             state: s,
             intent: .connectFinished(success: false, status: "Competing Claude hooks detected.")
         )
-        #expect(s.step == .jump)
+        #expect(s.step == .connect)
         #expect(s.configureStatus.contains("Competing"))
     }
 
+    @Test func connectContinueAnywayAdvancesToJump() {
+        var s = OnboardingStateModel(step: .connect, configureStatus: "Connect failed.")
+        s = OnboardingFlow.reduce(state: s, intent: .connectContinueAnyway)
+        #expect(s.step == .jump)
+    }
 
-    @Test func jumpContinueOpensAccessibilityThenStayReady() {
+    @Test func jumpContinueOpensPrivacySettingsThenStayReady() {
         var s = OnboardingStateModel(step: .jump)
         s = OnboardingFlow.reduce(state: s, intent: .continueTapped)
-        #expect(s.effects == [.openAccessibilitySettings])
+        #expect(s.effects == [.openAutomationSettings, .openAccessibilitySettings])
         #expect(s.step == .stayReady)
     }
 
@@ -48,11 +53,36 @@ struct OnboardingFlowTests {
         #expect(s.step == .stayReady)
     }
 
-    @Test func stayReadyAppliesLoginThenYoureSet() {
+    @Test func stayReadyAppliesLoginWhenEnabled() {
         var s = OnboardingStateModel(step: .stayReady, launchAtLogin: true)
         s = OnboardingFlow.reduce(state: s, intent: .continueTapped)
         #expect(s.effects == [.applyLaunchAtLogin(true)])
+        #expect(s.step == .stayReady)
+    }
+
+    @Test func stayReadySkipsLoginWhenDisabled() {
+        var s = OnboardingStateModel(step: .stayReady, launchAtLogin: false)
+        s = OnboardingFlow.reduce(state: s, intent: .continueTapped)
+        #expect(s.effects == [.applyLaunchAtLogin(false)])
         #expect(s.step == .youreSet)
+    }
+
+    @Test func launchAtLoginSuccessAdvancesToYoureSet() {
+        var s = OnboardingStateModel(step: .stayReady, launchAtLogin: true)
+        s = OnboardingFlow.reduce(state: s, intent: .launchAtLoginFinished(success: true))
+        #expect(s.step == .youreSet)
+        #expect(s.launchAtLogin == true)
+    }
+
+    @Test func launchAtLoginFailureClearsToggleAndStays() {
+        var s = OnboardingStateModel(step: .stayReady, launchAtLogin: true)
+        s = OnboardingFlow.reduce(
+            state: s,
+            intent: .launchAtLoginFinished(success: false, status: "Could not enable Open at Login.")
+        )
+        #expect(s.step == .stayReady)
+        #expect(s.launchAtLogin == false)
+        #expect(s.launchAtLoginStatus.contains("Could not enable"))
     }
 
     @Test func finishCompletes() {

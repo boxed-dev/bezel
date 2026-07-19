@@ -75,6 +75,35 @@ public struct TerminalHint: Codable, Sendable, Hashable {
         self.kittyWindow = kittyWindow
         self.warpFocusURL = warpFocusURL
     }
+
+    /// Prefer non-empty fields from `other`, keep ours when the new hook omitted them.
+    public func merging(_ other: TerminalHint) -> TerminalHint {
+        func pick(_ a: String?, _ b: String?) -> String? {
+            if let b, !b.isEmpty { return b }
+            if let a, !a.isEmpty { return a }
+            return nil
+        }
+        return TerminalHint(
+            termProgram: pick(termProgram, other.termProgram),
+            bundleID: pick(bundleID, other.bundleID),
+            itermSession: pick(itermSession, other.itermSession),
+            tty: pick(tty, other.tty),
+            tmux: pick(tmux, other.tmux),
+            tmuxPane: pick(tmuxPane, other.tmuxPane),
+            kittyWindow: pick(kittyWindow, other.kittyWindow),
+            warpFocusURL: pick(warpFocusURL, other.warpFocusURL)
+        )
+    }
+
+    public var hasJumpTarget: Bool {
+        (itermSession?.isEmpty == false)
+            || (tty?.isEmpty == false)
+            || (warpFocusURL?.isEmpty == false)
+            || (kittyWindow?.isEmpty == false)
+            || (tmuxPane?.isEmpty == false)
+            || (termProgram?.isEmpty == false)
+            || (bundleID?.isEmpty == false)
+    }
 }
 
 public struct SessionID: Hashable, Codable, Sendable, RawRepresentable {
@@ -91,7 +120,11 @@ public struct Session: Identifiable, Codable, Sendable, Hashable {
     public var phase: SessionPhase
     public var cwd: String?
     public var title: String?
+    /// Subagent / named agent (`agent_type`), humanized for UI separately.
+    public var agentType: String?
     public var lastTool: String?
+    /// Command / path / description from the latest tool_input.
+    public var lastToolDetail: String?
     public var terminal: TerminalHint?
     public var updatedAt: Date
 
@@ -101,7 +134,9 @@ public struct Session: Identifiable, Codable, Sendable, Hashable {
         phase: SessionPhase = .idle,
         cwd: String? = nil,
         title: String? = nil,
+        agentType: String? = nil,
         lastTool: String? = nil,
+        lastToolDetail: String? = nil,
         terminal: TerminalHint? = nil,
         updatedAt: Date = Date()
     ) {
@@ -110,7 +145,9 @@ public struct Session: Identifiable, Codable, Sendable, Hashable {
         self.phase = phase
         self.cwd = cwd
         self.title = title
+        self.agentType = agentType
         self.lastTool = lastTool
+        self.lastToolDetail = lastToolDetail
         self.terminal = terminal
         self.updatedAt = updatedAt
     }

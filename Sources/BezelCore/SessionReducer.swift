@@ -7,18 +7,29 @@ public enum SessionReducer {
         next.cwd = envelope.cwd ?? next.cwd
         next.updatedAt = now
         if let tool = envelope.toolName { next.lastTool = tool }
+        if let detail = envelope.toolDetail { next.lastToolDetail = detail }
+        if let agent = envelope.agentType, !agent.isEmpty { next.agentType = agent }
         if let source = envelope.source, let parsed = AgentSource(rawValue: source) {
             next.source = parsed
         }
+        next.title = DisplayNames.sessionTitle(
+            sessionTitle: envelope.sessionTitle,
+            cwd: next.cwd,
+            agentType: next.agentType,
+            existing: next.title
+        )
 
         let event = HookEventName(raw: envelope.hookEventName)
+
+        // `.done` is sticky until a fresh SessionStart — otherwise late Stop/PreToolUse
+        // after SessionEnd resurrects zombie sessions in the notch.
+        if next.phase == .done && event != .sessionStart && event != .sessionEnd {
+            return next
+        }
 
         switch event {
         case .sessionStart:
             next.phase = .working
-            if next.title == nil, let cwd = next.cwd {
-                next.title = (cwd as NSString).lastPathComponent
-            }
         case .stop:
             // Turn finished — keep session visible (idle), not gone.
             // SessionEnd is the only true "remove from list" event.
@@ -42,9 +53,8 @@ public enum SessionReducer {
         case .permissionRequest:
             next.phase = envelope.toolName == "ExitPlanMode" ? .planReview : .waitingPermission
         case .notification:
-            if envelope.question != nil {
-                next.phase = .waitingQuestion
-            }
+            // Notification+question is a non-blocking event (Phase 1) — do not wait.
+            break
         case .unknown:
             break
         }

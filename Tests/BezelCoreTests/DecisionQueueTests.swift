@@ -99,6 +99,18 @@ struct DecisionQueueTests {
         #expect(id == "tu_abc")
     }
 
+    @Test func extractRequestIDPrefersToolUseIdOverGenericId() {
+        let json = #"{"hook_event_name":"PreToolUse","id":"generic","tool_use_id":"tu_prefer","tool_name":"Bash"}"#
+        let id = DecisionKeyFactory.extractRequestID(from: Data(json.utf8))
+        #expect(id == "tu_prefer")
+    }
+
+    @Test func extractRequestIDFromNestedToolUseId() {
+        let json = #"{"hook_event_name":"PreToolUse","toolCall":{"tool_use_id":"tu_nested","name":"Bash"}}"#
+        let id = DecisionKeyFactory.extractRequestID(from: Data(json.utf8))
+        #expect(id == "tu_nested")
+    }
+
     @Test func attentionKindMapsExitPlanModeToPlanReview() {
         let kind = DecisionQueue.attentionKind(
             routeKind: .permission,

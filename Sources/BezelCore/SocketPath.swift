@@ -19,15 +19,18 @@ public enum SocketPath {
     }
 
     /// Ensures the parent directory exists with restrictive permissions.
+    /// Re-asserts `0700` even when the directory already exists.
     @discardableResult
     public static func ensureParentDirectory() throws -> String {
         let path = resolve()
         let dir = (path as NSString).deletingLastPathComponent
-        try FileManager.default.createDirectory(
+        let fm = FileManager.default
+        try fm.createDirectory(
             atPath: dir,
             withIntermediateDirectories: true,
             attributes: [.posixPermissions: 0o700]
         )
+        try fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir)
         return path
     }
 }

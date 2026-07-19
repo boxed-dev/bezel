@@ -28,6 +28,31 @@ struct DecisionJSONTests {
         #expect(decision?["message"] as? String == msg)
     }
 
+    @Test func bezelSkipDenyUsesPermissionShape() throws {
+        let data = DecisionJSON.deny(
+            for: .permission,
+            hookEventName: "PermissionRequest",
+            message: "Bezel skipped (BEZEL_SKIP)"
+        )
+        let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        let hook = obj?["hookSpecificOutput"] as? [String: Any]
+        let decision = hook?["decision"] as? [String: Any]
+        #expect(decision?["behavior"] as? String == "deny")
+        #expect(decision?["message"] as? String == "Bezel skipped (BEZEL_SKIP)")
+    }
+
+    @Test func bezelSkipDenyUsesPreToolUseShapeForQuestion() throws {
+        let data = DecisionJSON.deny(
+            for: .question,
+            hookEventName: "PreToolUse",
+            message: "Bezel skipped (BEZEL_SKIP)"
+        )
+        let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        let hook = obj?["hookSpecificOutput"] as? [String: Any]
+        #expect(hook?["permissionDecision"] as? String == "deny")
+        #expect(hook?["permissionDecisionReason"] as? String == "Bezel skipped (BEZEL_SKIP)")
+    }
+
     @Test func denyEscapesQuotesInMessage() throws {
         let data = DecisionJSON.permissionDeny(message: #"say "no""#)
         let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any]

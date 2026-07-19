@@ -8,10 +8,6 @@ import Darwin
 @main
 enum BezelBridgeMain {
     static func main() {
-        if ProcessInfo.processInfo.environment["BEZEL_SKIP"] != nil {
-            exit(0)
-        }
-
         let args = CommandLine.arguments
         var sourceOverride: String?
         var eventOverride: String?
@@ -67,13 +63,12 @@ enum BezelBridgeMain {
             obj["cwd"] = FileManager.default.currentDirectoryPath
         }
 
-        // Capture live TTY + env hints for Jump (_iterm_session, _tty, TMUX_*, TERM_PROGRAM→_term_app, kitty, warp).
-        var tty: String?
-        var ttyBuf = [CChar](repeating: 0, count: 1024)
-        if ttyname_r(STDIN_FILENO, &ttyBuf, ttyBuf.count) == 0 {
-            tty = String(decoding: ttyBuf.prefix(while: { $0 != 0 }).map { UInt8(bitPattern: $0) }, as: UTF8.self)
-        }
-        TerminalHintExtractor.merge(into: &obj, env: env, tty: tty)
+        // Controlling TTY via /dev/tty (stdin is a pipe under hooks). Env fallback inside merge.
+        TerminalHintExtractor.merge(
+            into: &obj,
+            env: env,
+            tty: TerminalHintExtractor.resolveControllingTTY()
+        )
 
         guard let enriched = try? JSONSerialization.data(withJSONObject: obj, options: []) else {
             FileHandle.standardOutput.write(DecisionJSON.parseFailed())
@@ -89,6 +84,21 @@ enum BezelBridgeMain {
         }
 
         let blocking = PermissionRouting.isBlocking(payload.routeKind)
+
+        // BEZEL_SKIP: fail closed on blocking routes (kind-correct deny), not silent allow.
+        if env["BEZEL_SKIP"] != nil {
+            if blocking {
+                FileHandle.standardOutput.write(
+                    DecisionJSON.deny(
+                        for: payload.routeKind,
+                        hookEventName: payload.hookEventName,
+                        message: "Bezel skipped (BEZEL_SKIP)"
+                    )
+                )
+            }
+            exit(0)
+        }
+
         let response = UnixClient.send(
             enriched,
             blocking: blocking
@@ -109,6 +119,7 @@ enum BezelBridgeMain {
 }
 
 enum UnixClient {
+    /// Fire-and-forget or blocking send over the Bezel UDS using shared `UnixSocket.connect`.
     static func send(_ data: Data, blocking: Bool) -> Data? {
         let path: String
         do {
@@ -117,54 +128,16 @@ enum UnixClient {
             return nil
         }
 
-        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
-        guard fd >= 0 else { return nil }
-        defer { close(fd) }
-
-        var addr = sockaddr_un()
-        addr.sun_family = sa_family_t(AF_UNIX)
-        let pathBytes = path.utf8CString
-        guard pathBytes.count <= MemoryLayout.size(ofValue: addr.sun_path) else { return nil }
-        withUnsafeMutablePointer(to: &addr.sun_path) { ptr in
-            ptr.withMemoryRebound(to: CChar.self, capacity: pathBytes.count) { dest in
-                for (i, b) in pathBytes.enumerated() { dest[i] = b }
-            }
-        }
-
         let connectTimeout = blocking
             ? IPCConstants.blockingConnectTimeoutSeconds
             : IPCConstants.eventTimeoutSeconds
 
-        // Non-blocking connect + poll
-        let flags = fcntl(fd, F_GETFL, 0)
-        _ = fcntl(fd, F_SETFL, flags | O_NONBLOCK)
-
-        let conn: Int32 = withUnsafePointer(to: &addr) { ptr in
-            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockPtr in
-                Darwin.connect(fd, sockPtr, socklen_t(MemoryLayout<sockaddr_un>.size))
-            }
-        }
-
-        if conn < 0 && errno != EINPROGRESS {
+        guard let fd = UnixSocket.connect(path: path, timeoutSeconds: connectTimeout) else {
             return nil
         }
+        defer { close(fd) }
 
-        var pfd = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
-        let ready = poll(&pfd, 1, Int32(connectTimeout * 1000))
-        guard ready > 0 else { return nil }
-
-        _ = fcntl(fd, F_SETFL, flags) // back to blocking for IO
-
-        var written = 0
-        let bytes = [UInt8](data)
-        while written < bytes.count {
-            let n = bytes.withUnsafeBufferPointer { buf in
-                Darwin.write(fd, buf.baseAddress!.advanced(by: written), bytes.count - written)
-            }
-            if n <= 0 { return nil }
-            written += n
-        }
-
+        UnixSocket.writeAll(fd: fd, data)
         // Half-close write so server sees EOF
         shutdown(fd, SHUT_WR)
 
@@ -173,26 +146,11 @@ enum UnixClient {
             return nil
         }
 
-        // Blocking recv until EOF — SO_RCVTIMEO enforces a real kernel timeout.
-        var timeout = timeval(
-            tv_sec: Int(IPCConstants.blockingRecvTimeoutSeconds),
-            tv_usec: 0
+        let response = UnixSocket.readAll(
+            fd: fd,
+            limit: IPCConstants.maxPayloadBytes,
+            timeoutSeconds: IPCConstants.blockingRecvTimeoutSeconds
         )
-        _ = setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
-
-        var response = Data()
-        var buf = [UInt8](repeating: 0, count: 65_536)
-        while true {
-            let n = Darwin.read(fd, &buf, buf.count)
-            if n == 0 { break }
-            if n < 0 {
-                if errno == EINTR { continue }
-                // EAGAIN / EWOULDBLOCK: SO_RCVTIMEO fired
-                break
-            }
-            response.append(contentsOf: buf[0..<n])
-            if response.count > IPCConstants.maxPayloadBytes { break }
-        }
         return response.isEmpty ? nil : response
     }
 }

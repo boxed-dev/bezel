@@ -55,6 +55,34 @@ struct SessionReducerTests {
         #expect(s.phase == .done)
     }
 
+    @Test func doneIsNotResurrectedByLatePreToolUse() throws {
+        var s = Session(id: SessionID("s1"), phase: .done)
+        let env = try payload(#"{"hook_event_name":"PreToolUse","session_id":"s1","tool_name":"Bash"}"#)
+        s = SessionReducer.apply(session: s, envelope: env)
+        #expect(s.phase == .done)
+    }
+
+    @Test func doneIsNotResurrectedByStopOrPostToolUse() throws {
+        var s = Session(id: SessionID("s1"), phase: .done)
+        s = SessionReducer.apply(
+            session: s,
+            envelope: try payload(#"{"hook_event_name":"Stop","session_id":"s1"}"#)
+        )
+        #expect(s.phase == .done)
+        s = SessionReducer.apply(
+            session: s,
+            envelope: try payload(#"{"hook_event_name":"PostToolUse","session_id":"s1","tool_name":"Bash"}"#)
+        )
+        #expect(s.phase == .done)
+    }
+
+    @Test func sessionStartRevivesDoneSession() throws {
+        var s = Session(id: SessionID("s1"), phase: .done, cwd: "/Users/x/proj")
+        let env = try payload(#"{"hook_event_name":"SessionStart","session_id":"s1","cwd":"/Users/x/proj"}"#)
+        s = SessionReducer.apply(session: s, envelope: env)
+        #expect(s.phase == .working)
+    }
+
     @Test func afterDecisionReturnsWorking() {
         let s = Session(id: SessionID("s1"), phase: .waitingPermission)
         let next = SessionReducer.afterDecision(session: s)

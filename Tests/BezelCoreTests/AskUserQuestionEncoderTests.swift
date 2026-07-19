@@ -56,6 +56,19 @@ struct AskUserQuestionEncoderTests {
         }
     }
 
+    @Test func rejectsIncompleteAnswers() {
+        let questions: [[String: Any]] = [
+            ["question": "A?", "options": [["label": "1"]]],
+            ["question": "B?", "options": [["label": "2"]]],
+        ]
+        #expect(throws: AskUserQuestionEncoder.EncodeError.incompleteAnswers) {
+            try AskUserQuestionEncoder.encode(
+                questions: questions,
+                answers: [.init(question: "A?", answer: "1")]
+            )
+        }
+    }
+
     /// M3: resolve path must echo original tool_input.questions (extra keys survive).
     @Test func echoesOriginalQuestionsIncludingExtraKeys() throws {
         let original: [[String: Any]] = [

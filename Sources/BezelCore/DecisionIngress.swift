@@ -10,6 +10,8 @@ public struct DecisionAttention: Sendable, Equatable {
     public let toolName: String?
     public let summary: String
     public let hookEventName: String
+    public let permissionSuggestionsJSON: Data?
+    public let requestedRuleContent: String?
 
     public init(
         kind: AttentionKind,
@@ -19,7 +21,9 @@ public struct DecisionAttention: Sendable, Equatable {
         prompt: String? = nil,
         toolName: String?,
         summary: String,
-        hookEventName: String
+        hookEventName: String,
+        permissionSuggestionsJSON: Data? = nil,
+        requestedRuleContent: String? = nil
     ) {
         self.kind = kind
         self.plan = plan
@@ -29,12 +33,19 @@ public struct DecisionAttention: Sendable, Equatable {
         self.toolName = toolName
         self.summary = summary
         self.hookEventName = hookEventName
+        self.permissionSuggestionsJSON = permissionSuggestionsJSON
+        self.requestedRuleContent = requestedRuleContent
     }
 }
 
 public enum DecisionIngress {
     /// Returns attention work for blocking routes; `nil` for fire-and-forget events.
     public static func attention(for payload: HookPayload) -> DecisionAttention? {
+        // Notification is never AskUserQuestion PreToolUse — do not synthesize a blocking question.
+        if HookEventName(raw: payload.hookEventName) == .notification {
+            return nil
+        }
+
         let kind = DecisionQueue.attentionKind(
             routeKind: payload.routeKind,
             toolName: payload.toolName,
@@ -53,11 +64,14 @@ public enum DecisionIngress {
                 hookEventName: payload.hookEventName
             )
         case .permission:
+            let suggestions = PermissionSuggestions.json(from: payload.rawJSON)
             return DecisionAttention(
                 kind: .permission,
                 toolName: payload.toolName,
-                summary: payload.toolName.map { "Allow \($0)?" } ?? "Permission request",
-                hookEventName: payload.hookEventName
+                summary: permissionSummary(for: payload),
+                hookEventName: payload.hookEventName,
+                permissionSuggestionsJSON: suggestions,
+                requestedRuleContent: PermissionSuggestions.requestedRuleContent(from: payload.rawJSON)
             )
         case .question:
             let toolInput = QuestionParser.toolInput(from: payload.rawJSON)
@@ -79,5 +93,21 @@ public enum DecisionIngress {
                 hookEventName: payload.hookEventName
             )
         }
+    }
+
+    private static func permissionSummary(for payload: HookPayload) -> String {
+        let tool = payload.toolName ?? "tool"
+        if let obj = try? JSONSerialization.jsonObject(with: payload.rawJSON) as? [String: Any] {
+            let input = (obj["tool_input"] as? [String: Any])
+                ?? (obj["toolInput"] as? [String: Any])
+            if let command = input?["command"] as? String, !command.isEmpty {
+                let clipped = command.count > 80 ? String(command.prefix(77)) + "…" : command
+                return "Allow \(tool)?\n\(clipped)"
+            }
+            if let desc = input?["description"] as? String, !desc.isEmpty {
+                return "Allow \(tool)?\n\(desc)"
+            }
+        }
+        return "Allow \(tool)?"
     }
 }

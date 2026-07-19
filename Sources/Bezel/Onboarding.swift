@@ -48,6 +48,7 @@ struct OnboardingRoot: View {
     @State private var flow = OnboardingStateModel()
 
     private let accent = Color(red: 0.55, green: 0.64, blue: 0.71)
+    private let danger = Color(red: 0.85, green: 0.45, blue: 0.4)
 
     var body: some View {
         ZStack {
@@ -77,42 +78,33 @@ struct OnboardingRoot: View {
 
     @ViewBuilder
     private var group: some View {
-        switch flow.step {
-        case .welcome: welcome
-        case .glance: glance
-        case .connect: connect
-        case .jump: jump
-        case .stayReady: stayReady
-        case .youreSet: youreSet
+        // `.id(step)` + transition → steps crossfade/slide instead of hard-swapping.
+        ZStack {
+            switch flow.step {
+            case .welcome: welcome
+            case .glance: glance
+            case .connect: connect
+            case .jump: jump
+            case .stayReady: stayReady
+            case .youreSet: youreSet
+            }
         }
+        .id(flow.step)
+        .transition(
+            .asymmetric(
+                insertion: .opacity.combined(with: .offset(y: 10)),
+                removal: .opacity
+            )
+        )
+        .animation(.easeOut(duration: 0.3), value: flow.step)
     }
 
     private var welcome: some View {
-        VStack(spacing: 20) {
-            NotchGlyph()
-                .frame(height: 36)
-            Text("Bezel")
-                .font(.system(size: 42, weight: .semibold))
-                .tracking(4)
-            Text("Your agents, at the edge of the screen.")
-                .font(.system(size: 16))
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-        }
+        WelcomeStepView()
     }
 
     private var glance: some View {
-        VStack(alignment: .leading, spacing: 24) {
-            titleBlock(
-                "When an agent needs you, Bezel opens from the notch.",
-                subtitle: "When it doesn’t, it disappears."
-            )
-            VStack(alignment: .leading, spacing: 10) {
-                phaseDemo("Working", color: accent)
-                phaseDemo("Waiting", color: Color(red: 0.77, green: 0.65, blue: 0.45))
-                phaseDemo("Done", color: Color(red: 0.45, green: 0.55, blue: 0.48))
-            }
-        }
+        GlanceStepView()
     }
 
     private var connect: some View {
@@ -122,6 +114,12 @@ struct OnboardingRoot: View {
                 subtitle: "You can change this later."
             )
             DetectedAgentsList()
+            if store.listenFailed {
+                Text("Hook socket isn’t listening. Connect can’t reach Bezel until the listener starts.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(danger)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             configureStatusLabel
         }
     }
@@ -130,9 +128,9 @@ struct OnboardingRoot: View {
         VStack(alignment: .leading, spacing: 24) {
             titleBlock(
                 "Jump returns you to the exact session.",
-                subtitle: "macOS needs Accessibility for that."
+                subtitle: "macOS needs Automation for Terminal and Ghostty (Apple Events), and Accessibility as a fallback for focus."
             )
-            Text("You can enable this later from Settings.")
+            Text("You can enable these later from Settings → Privacy & Security.")
                 .font(.system(size: 13))
                 .foregroundStyle(.tertiary)
             // Keep Connect result visible after advance (esp. socket probe failure).
@@ -143,14 +141,9 @@ struct OnboardingRoot: View {
     @ViewBuilder
     private var configureStatusLabel: some View {
         if !flow.configureStatus.isEmpty {
-            let failed = flow.configureStatus.localizedCaseInsensitiveContains("failed")
             Text(flow.configureStatus)
                 .font(.system(size: 12))
-                .foregroundStyle(
-                    failed
-                        ? Color(red: 0.85, green: 0.45, blue: 0.4)
-                        : accent
-                )
+                .foregroundStyle(statusLooksFailed(flow.configureStatus) ? danger : accent)
         }
     }
 
@@ -168,6 +161,12 @@ struct OnboardingRoot: View {
                 )
             )
             .toggleStyle(.switch)
+            if !flow.launchAtLoginStatus.isEmpty {
+                Text(flow.launchAtLoginStatus)
+                    .font(.system(size: 12))
+                    .foregroundStyle(danger)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 
@@ -188,40 +187,58 @@ struct OnboardingRoot: View {
     }
 
     private var footer: some View {
-        HStack {
-            if flow.step != .welcome && flow.step != .youreSet {
-                Button("Back") {
-                    withAnimation(.easeOut(duration: 0.3)) {
-                        dispatch(.backTapped)
+        ZStack {
+            HStack {
+                if flow.step != .welcome && flow.step != .youreSet {
+                    Button("Back") {
+                        withAnimation(.easeOut(duration: 0.3)) {
+                            dispatch(.backTapped)
+                        }
                     }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-            }
-            Spacer()
-            if flow.step == .jump {
-                Button("Skip for now") {
-                    withAnimation(.easeOut(duration: 0.3)) {
-                        dispatch(.accessibilitySkipped)
+                Spacer()
+                if flow.step == .connect, connectFailedVisible {
+                    Button("Continue anyway") {
+                        withAnimation(.easeOut(duration: 0.3)) {
+                            dispatch(.connectContinueAnyway)
+                        }
                     }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .padding(.trailing, 12)
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .padding(.trailing, 12)
+                if flow.step == .jump {
+                    Button("Skip for now") {
+                        withAnimation(.easeOut(duration: 0.3)) {
+                            dispatch(.accessibilitySkipped)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .padding(.trailing, 12)
+                }
+                Button(primaryLabel) {
+                    advance()
+                }
+                .modifier(PrimaryActionModifier())
+                .keyboardShortcut(.defaultAction)
             }
-            Button(primaryLabel) {
-                advance()
-            }
-            .buttonStyle(BezelPrimaryButtonStyle())
-            .keyboardShortcut(.defaultAction)
+            // Step progress — centered, quiet, never steals the primary action.
+            ProgressDots(current: flow.step.rawValue, total: OnboardingStep.allCases.count)
         }
+    }
+
+    private var connectFailedVisible: Bool {
+        statusLooksFailed(flow.configureStatus)
     }
 
     private var primaryLabel: String {
         switch flow.step {
         case .welcome: "Continue"
         case .connect: "Connect"
-        case .jump: "Enable Accessibility"
+        case .jump: "Open Privacy Settings"
         case .youreSet: "Done"
         default: "Continue"
         }
@@ -244,25 +261,90 @@ struct OnboardingRoot: View {
             switch effect {
             case .installHooks:
                 Task {
+                    // Block Connect messaging when HookServer.bind/listen failed at launch.
+                    guard store.isHookServerListening else {
+                        withAnimation(.easeOut(duration: 0.3)) {
+                            dispatch(.connectFinished(
+                                success: false,
+                                status: "Bezel socket failed to start — restart the app."
+                            ))
+                        }
+                        return
+                    }
                     let result = await ConfigInstaller.installClaudeHooks()
                     withAnimation(.easeOut(duration: 0.3)) {
                         dispatch(.connectFinished(success: result.ok, status: result.message))
                     }
                 }
+            case .openAutomationSettings:
+                openPrivacyPane("Privacy_Automation")
             case .openAccessibilitySettings:
-                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
-                    NSWorkspace.shared.open(url)
-                }
+                openPrivacyPane("Privacy_Accessibility")
             case .applyLaunchAtLogin(let enabled):
-                do {
-                    try LaunchAtLogin.setEnabled(enabled)
-                } catch {
-                    // SMAppService may fail until Bezel is installed as a .app under /Applications.
-                }
+                applyLaunchAtLoginEffect(enabled)
             case .complete:
                 onDone()
             }
         }
+    }
+
+    private func applyLaunchAtLoginEffect(_ enabled: Bool) {
+        guard enabled else {
+            do {
+                try LaunchAtLogin.setEnabled(false)
+            } catch {
+                // Unregister soft-fails; toggle already off and we advanced.
+            }
+            return
+        }
+        do {
+            try LaunchAtLogin.setEnabled(true)
+            if LaunchAtLogin.isEnabled {
+                withAnimation(.easeOut(duration: 0.3)) {
+                    dispatch(.launchAtLoginFinished(success: true))
+                }
+            } else {
+                withAnimation(.easeOut(duration: 0.3)) {
+                    dispatch(
+                        .launchAtLoginFinished(
+                            success: false,
+                            status: "Could not enable Open at Login. Install Bezel as an app under /Applications, then try again."
+                        )
+                    )
+                }
+            }
+        } catch {
+            withAnimation(.easeOut(duration: 0.3)) {
+                dispatch(
+                    .launchAtLoginFinished(
+                        success: false,
+                        status: "Could not enable Open at Login: \(error.localizedDescription)"
+                    )
+                )
+            }
+        }
+    }
+
+    /// Best-effort deep link into System Settings privacy panes (Automation / Accessibility).
+    private func openPrivacyPane(_ anchor: String) {
+        let candidates = [
+            "x-apple.systempreferences:com.apple.preference.security?\(anchor)",
+            "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?\(anchor)",
+        ]
+        for string in candidates {
+            if let url = URL(string: string), NSWorkspace.shared.open(url) {
+                return
+            }
+        }
+    }
+
+    private func statusLooksFailed(_ status: String) -> Bool {
+        let lower = status.lowercased()
+        return lower.contains("fail")
+            || lower.contains("compet")
+            || lower.contains("could not")
+            || lower.contains("error")
+            || lower.contains("denied")
     }
 
     private func titleBlock(_ title: String, subtitle: String) -> some View {
@@ -276,10 +358,76 @@ struct OnboardingRoot: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
+}
 
-    private func phaseDemo(_ label: String, color: Color) -> some View {
+// MARK: - Step views
+
+/// Welcome — breathing notch glyph, wordmark drift-in.
+private struct WelcomeStepView: View {
+    @State private var breathing = false
+    @State private var appeared = false
+
+    var body: some View {
+        VStack(spacing: 20) {
+            NotchGlyph()
+                .frame(width: 120, height: 30)
+                .scaleEffect(breathing ? 1.05 : 1)
+                .opacity(breathing ? 0.95 : 0.7)
+                .animation(.easeInOut(duration: 1.6).repeatForever(autoreverses: true), value: breathing)
+            Text("Bezel")
+                .font(.system(size: 42, weight: .semibold))
+                .tracking(4)
+            Text("Your agents, at the edge of the screen.")
+                .font(.system(size: 16))
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .opacity(appeared ? 1 : 0)
+        .offset(y: appeared ? 0 : 8)
+        .onAppear {
+            breathing = true
+            withAnimation(.easeOut(duration: 0.45)) { appeared = true }
+        }
+    }
+}
+
+/// The glance — Working / Waiting / Done rows stagger in to teach the model.
+private struct GlanceStepView: View {
+    @State private var shownRows = 0
+
+    private let accent = Color(red: 0.55, green: 0.64, blue: 0.71)
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 24) {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("When an agent needs you, Bezel opens from the notch.")
+                    .font(.system(size: 22, weight: .semibold))
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("When it doesn’t, it disappears.")
+                    .font(.system(size: 15))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            VStack(alignment: .leading, spacing: 10) {
+                phaseDemo("Working", color: accent, index: 0)
+                phaseDemo("Waiting", color: Color(red: 0.77, green: 0.65, blue: 0.45), index: 1)
+                phaseDemo("Done", color: Color(red: 0.45, green: 0.55, blue: 0.48), index: 2)
+            }
+        }
+        .onAppear {
+            shownRows = 0
+            for i in 0...2 {
+                withAnimation(.easeOut(duration: 0.35).delay(0.18 + Double(i) * 0.12)) {
+                    shownRows = i + 1
+                }
+            }
+        }
+    }
+
+    private func phaseDemo(_ label: String, color: Color, index: Int) -> some View {
         HStack(spacing: 10) {
             Circle().fill(color).frame(width: 8, height: 8)
+                .shadow(color: color.opacity(0.5), radius: 3)
             Text(label)
                 .font(.system(size: 14, weight: .medium))
             Spacer()
@@ -287,6 +435,28 @@ struct OnboardingRoot: View {
         .padding(.vertical, 8)
         .padding(.horizontal, 12)
         .background(.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .opacity(shownRows > index ? 1 : 0)
+        .offset(x: shownRows > index ? 0 : -8)
+    }
+}
+
+/// Quiet step dots — current step is a steel pill, the rest recede.
+private struct ProgressDots: View {
+    let current: Int
+    let total: Int
+
+    var body: some View {
+        HStack(spacing: 6) {
+            ForEach(0..<total, id: \.self) { i in
+                Capsule(style: .continuous)
+                    .fill(i == current
+                        ? Color(red: 0.55, green: 0.64, blue: 0.71)
+                        : Color.white.opacity(i < current ? 0.22 : 0.12))
+                    .frame(width: i == current ? 16 : 5, height: 5)
+            }
+        }
+        .animation(.snappy(duration: 0.25), value: current)
+        .accessibilityLabel("Step \(current + 1) of \(total)")
     }
 }
 
@@ -294,11 +464,10 @@ struct NotchGlyph: View {
     var body: some View {
         Capsule()
             .fill(.white.opacity(0.12))
-            .overlay(
+            .overlay {
                 Capsule()
                     .strokeBorder(.white.opacity(0.2), lineWidth: 0.5)
-            )
-            .frame(width: 120, height: 28)
+            }
     }
 }
 
@@ -338,5 +507,11 @@ struct BezelPrimaryButtonStyle: ButtonStyle {
                 in: Capsule()
             )
             .foregroundStyle(Color(red: 0.07, green: 0.08, blue: 0.1))
+    }
+}
+
+private struct PrimaryActionModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        content.buttonStyle(BezelPrimaryButtonStyle())
     }
 }

@@ -20,7 +20,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let store = SessionStore()
     private var hookServer: HookServer?
     private var notchController: NotchController?
+    private var usageMonitor: UsageMonitor?
     private var statusItem: NSStatusItem?
+    private var globalHotkeyMonitor: Any?
+    private var localHotkeyMonitor: Any?
 
     private var instanceLockFD: Int32 = -1
 
@@ -49,17 +52,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // CRITICAL: listen before any hook install writes settings.
         let server = HookServer(store: store)
         hookServer = server
-        server.start()
+        let listening = server.start()
+        store.setHookServerListening(listening)
+        if !listening {
+            NSLog("Bezel: HookServer failed to start — Connect will be blocked until restart")
+        }
 
         // Keep ~/.bezel bridge + hook script aligned with this app binary.
-        Task {
-            _ = await ConfigInstaller.syncInstalledBridgeIfNeeded()
+        // Respects user-uninstalled marker — never re-merges after Settings Remove.
+        // Skip sync when bind failed — do not pretend the socket is live.
+        if listening {
+            Task {
+                _ = await ConfigInstaller.syncInstalledBridgeIfNeeded()
+            }
         }
 
         notchController = NotchController(store: store)
         notchController?.start()
 
+        store.permissionMemoryEnabled = PermissionMemorySettings.isEnabled
+
+        let usage = UsageMonitor(store: store)
+        usageMonitor = usage
+        usage.start()
+
+        // Keep Claude statusLine → ~/.bezel/cache/rl.json bridge alive.
+        ConfigInstaller.injectStatusLineUsageBridge()
+
         setupStatusItem()
+        setupDecisionHotkeys()
 
         if !OnboardingState.hasCompleted {
             OnboardingWindowController.shared.show(store: store)
@@ -80,7 +101,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        if let globalHotkeyMonitor {
+            NSEvent.removeMonitor(globalHotkeyMonitor)
+        }
+        if let localHotkeyMonitor {
+            NSEvent.removeMonitor(localHotkeyMonitor)
+        }
+        globalHotkeyMonitor = nil
+        localHotkeyMonitor = nil
+        usageMonitor?.stop()
+        usageMonitor = nil
         hookServer?.stop()
+        store.setHookServerListening(false)
         notchController?.stop()
     }
 
@@ -96,6 +128,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
         menu.addItem(NSMenuItem(title: "Bezel", action: nil, keyEquivalent: ""))
         menu.addItem(.separator())
+        if store.listenFailed {
+            let warn = NSMenuItem(
+                title: "Hook socket not listening",
+                action: nil,
+                keyEquivalent: ""
+            )
+            warn.isEnabled = false
+            menu.addItem(warn)
+            menu.addItem(.separator())
+        }
+        menu.addItem(NSMenuItem(
+            title: "Settings…",
+            action: #selector(openSettings),
+            keyEquivalent: ","
+        ))
         menu.addItem(NSMenuItem(
             title: "Open Onboarding…",
             action: #selector(openOnboarding),
@@ -111,11 +158,92 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem = item
     }
 
+    /// LSUIElement-friendly: activate + open the SwiftUI Settings scene.
+    @objc private func openSettings() {
+        NSApp.activate(ignoringOtherApps: true)
+        // macOS 13+: showSettingsWindow:; older builds used showPreferencesWindow:.
+        let settingsSelector = Selector(("showSettingsWindow:"))
+        if NSApp.responds(to: settingsSelector) {
+            NSApp.sendAction(settingsSelector, to: nil, from: nil)
+            return
+        }
+        let prefsSelector = Selector(("showPreferencesWindow:"))
+        if NSApp.responds(to: prefsSelector) {
+            NSApp.sendAction(prefsSelector, to: nil, from: nil)
+        }
+    }
+
     @objc private func openOnboarding() {
         OnboardingWindowController.shared.show(store: store)
     }
 
     @objc private func quit() {
         NSApp.terminate(nil)
+    }
+
+    /// ⌘Y Allow / ⌘N Deny when the notch needs attention — global while other apps are frontmost.
+    private func setupDecisionHotkeys() {
+        globalHotkeyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            _ = self?.handleDecisionHotkey(event, swallow: false)
+        }
+        if globalHotkeyMonitor == nil {
+            NSLog(
+                "Bezel: global hotkeys unavailable — grant Accessibility for ⌘Y/⌘N while other apps are frontmost"
+            )
+        }
+
+        localHotkeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self else { return event }
+            if self.handleDecisionHotkey(event, swallow: true) {
+                return nil
+            }
+            return event
+        }
+        if localHotkeyMonitor == nil {
+            NSLog("Bezel: local hotkey monitor failed to install")
+        }
+    }
+
+    /// - Returns: `true` when the event was handled (and may be swallowed locally).
+    @discardableResult
+    private func handleDecisionHotkey(_ event: NSEvent, swallow: Bool) -> Bool {
+        guard store.needsAttention else { return false }
+        guard event.modifierFlags.contains(.command) else { return false }
+        let key = event.charactersIgnoringModifiers?.lowercased() ?? ""
+
+        switch key {
+        case "y":
+            if event.modifierFlags.contains(.shift) {
+                guard store.pendingPermission != nil, store.permissionHasAlwaysOption else { return false }
+                store.resolvePermission(allow: true, always: true)
+                BezelSound.play(.allow)
+                return swallow
+            }
+            if store.pendingPermission != nil {
+                store.resolvePermission(allow: true, always: false)
+                BezelSound.play(.allow)
+                return swallow
+            }
+            if store.pendingPlanReview != nil {
+                store.resolvePlanReview(approve: true)
+                BezelSound.play(.allow)
+                return swallow
+            }
+            return false
+        case "n":
+            if store.pendingPermission != nil {
+                store.resolvePermission(allow: false)
+                BezelSound.play(.deny)
+                return swallow
+            }
+            if store.pendingPlanReview != nil {
+                store.resolvePlanReview(approve: false)
+                BezelSound.play(.deny)
+                return swallow
+            }
+            return false
+        default:
+            return false
+        }
     }
 }

@@ -82,4 +82,27 @@ struct TerminalHintExtractorTests {
         #expect(hint?.itermSession == "w0t0p0:abc")
         #expect(hint?.tty == "/dev/ttys001")
     }
+
+    @Test func mergeFallsBackToEnvTTYWhenNoLiveCapture() {
+        var obj: [String: Any] = [:]
+        // Explicit nil tty + no CTTY in this test process → env BEZEL_TTY / TTY.
+        // Pass empty env keys first to ensure merge uses BEZEL_TTY when resolve returns nil
+        // OR live CTTY when available (either is acceptable for `_tty` presence).
+        TerminalHintExtractor.merge(
+            into: &obj,
+            env: ["BEZEL_TTY": "/dev/ttys042"],
+            tty: nil
+        )
+        // Live CTTY wins when present; otherwise env fallback.
+        let tty = obj["_tty"] as? String
+        #expect(tty != nil)
+        if TerminalHintExtractor.resolveControllingTTY() == nil {
+            #expect(tty == "/dev/ttys042")
+        }
+    }
+
+    @Test func resolveControllingTTYDoesNotCrash() {
+        // May be nil under CI/launchd with no CTTY — API must remain safe.
+        _ = TerminalHintExtractor.resolveControllingTTY()
+    }
 }

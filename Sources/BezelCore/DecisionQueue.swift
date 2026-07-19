@@ -34,6 +34,10 @@ public struct DecisionEntry: Identifiable, Sendable, Equatable {
     /// Canonical `tool_input.questions` JSON for AskUserQuestionEncoder (preserves fixture shape).
     public let rawQuestionsJSON: Data?
     public let prompt: String?
+    /// Claude `permission_suggestions` JSON array — echo as `updatedPermissions` for Always allow.
+    public let permissionSuggestionsJSON: Data?
+    /// Requested command/description for opt-in memory fallback matching.
+    public let requestedRuleContent: String?
 
     public init(
         key: DecisionKey,
@@ -46,7 +50,9 @@ public struct DecisionEntry: Identifiable, Sendable, Equatable {
         planFilePath: String? = nil,
         questions: [QuestionItem] = [],
         rawQuestionsJSON: Data? = nil,
-        prompt: String? = nil
+        prompt: String? = nil,
+        permissionSuggestionsJSON: Data? = nil,
+        requestedRuleContent: String? = nil
     ) {
         self.key = key
         self.kind = kind
@@ -59,6 +65,8 @@ public struct DecisionEntry: Identifiable, Sendable, Equatable {
         self.questions = questions
         self.rawQuestionsJSON = rawQuestionsJSON
         self.prompt = prompt
+        self.permissionSuggestionsJSON = permissionSuggestionsJSON
+        self.requestedRuleContent = requestedRuleContent
     }
 }
 
@@ -152,18 +160,27 @@ public enum DecisionKeyFactory {
         guard let obj = try? JSONSerialization.jsonObject(with: rawJSON) as? [String: Any] else {
             return nil
         }
-        let keys = [
-            "tool_use_id", "toolUseId",
-            "request_id", "requestId",
-            "id",
-        ]
+        // Prefer tool_use_id everywhere it may appear (top-level or nested).
+        let toolUseKeys = ["tool_use_id", "toolUseId"]
+        if let id = firstString(in: obj, keys: toolUseKeys) { return id }
+        for nestKey in ["tool", "tool_input", "toolInput", "toolCall"] {
+            if let nest = obj[nestKey] as? [String: Any],
+               let id = firstString(in: nest, keys: toolUseKeys) {
+                return id
+            }
+        }
+        let fallbackKeys = ["request_id", "requestId", "id"]
+        if let id = firstString(in: obj, keys: fallbackKeys) { return id }
+        if let tool = obj["tool"] as? [String: Any],
+           let id = firstString(in: tool, keys: ["id"]) {
+            return id
+        }
+        return nil
+    }
+
+    private static func firstString(in obj: [String: Any], keys: [String]) -> String? {
         for key in keys {
             if let s = obj[key] as? String, !s.isEmpty { return s }
-        }
-        if let tool = obj["tool"] as? [String: Any] {
-            for key in ["tool_use_id", "id"] {
-                if let s = tool[key] as? String, !s.isEmpty { return s }
-            }
         }
         return nil
     }

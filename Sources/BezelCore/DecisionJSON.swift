@@ -2,8 +2,22 @@ import Foundation
 
 /// Claude-compatible decision payloads returned on bridge stdout.
 public enum DecisionJSON {
-    public static func permissionAllow() -> Data {
-        utf8(#"""
+    public static func permissionAllow(updatedPermissions: [[String: Any]]? = nil) -> Data {
+        if let updatedPermissions, !updatedPermissions.isEmpty {
+            let root: [String: Any] = [
+                "hookSpecificOutput": [
+                    "hookEventName": "PermissionRequest",
+                    "decision": [
+                        "behavior": "allow",
+                        "updatedPermissions": updatedPermissions,
+                    ] as [String: Any],
+                ] as [String: Any],
+            ]
+            if let data = try? JSONSerialization.data(withJSONObject: root, options: [.sortedKeys]) {
+                return data
+            }
+        }
+        return utf8(#"""
         {"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}
         """#)
     }

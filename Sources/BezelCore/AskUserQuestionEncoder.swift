@@ -16,6 +16,7 @@ public enum AskUserQuestionEncoder {
     public enum EncodeError: Error, Equatable {
         case missingQuestions
         case emptyAnswers
+        case incompleteAnswers
     }
 
     /// Build Claude PreToolUse allow + updatedInput for AskUserQuestion.
@@ -28,7 +29,18 @@ public enum AskUserQuestionEncoder {
 
         var answerMap: [String: String] = [:]
         for a in answers {
+            let trimmed = a.answer.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { throw EncodeError.incompleteAnswers }
             answerMap[a.question] = a.answer
+        }
+
+        for q in questions {
+            guard let text = q["question"] as? String,
+                  let ans = answerMap[text],
+                  !ans.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            else {
+                throw EncodeError.incompleteAnswers
+            }
         }
 
         let updatedInput: [String: Any] = [

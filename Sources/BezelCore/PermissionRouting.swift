@@ -16,6 +16,8 @@ public enum PermissionRouting {
 
         // Claude-only Phase 1: PreToolUse blocks only for interactive tools.
         // Gemini-family PreToolUse-as-permission is deferred to multi-agent phase.
+        // Notification+question is an event (not AskUserQuestion PreToolUse) — never block
+        // with updatedInput / question response shape.
         if event == .preToolUse {
             let tool = toolName ?? ""
             if tool == "AskUserQuestion" || tool == "ExitPlanMode" {
@@ -23,10 +25,8 @@ public enum PermissionRouting {
             }
         }
 
-        if (event == .notification), let q = question, !q.isEmpty {
-            return .question
-        }
-
+        _ = question
+        _ = source
         return .event
     }
 

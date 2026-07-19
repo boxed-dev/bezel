@@ -8,12 +8,79 @@ final class SessionStore {
     private(set) var sessions: [Session] = []
     private(set) var decisionQueue = DecisionQueue()
     private var resumes: [DecisionKey: (Data) -> Void] = [:]
+    /// SessionEnd tombstones — block late PostToolUse/etc. from resurrecting zombies.
+    private var endedAt: [SessionID: Date] = [:]
+    /// Bumps on every session mutation so notch compact views always refresh.
+    private(set) var presenceEpoch: UInt64 = 0
+    /// Claude.ai plan usage (5h / 7d) — NOT session count.
+    private(set) var usage: ClaudeUsageSnapshot?
+    /// Bumps when usage changes so compact trailing remeasures.
+    private(set) var usageEpoch: UInt64 = 0
+    /// Bumps on SessionStart so ExpandPolicy can stay quiet.
+    private(set) var sessionStartEpoch: UInt64 = 0
 
+    /// Opt-in local Always memory (default off — no surprise auto-allow).
+    var permissionMemoryEnabled = false
+
+    /// Set by AppDelegate from `HookServer.start()` — Connect must not claim listening if false.
+    private(set) var isHookServerListening = false
+
+    /// Inverse of `isHookServerListening` for status menu / Settings banners.
+    var listenFailed: Bool { !isHookServerListening }
+
+    /// Live sessions (not done). Stored-style access via sessions so Observation tracks reliably.
     var activeCount: Int { sessions.filter { $0.phase != .done }.count }
     var needsAttention: Bool { decisionQueue.head != nil }
+    /// Working / waiting sessions — leading-dot activity, not the % meter.
+    var liveActivityCount: Int {
+        sessions.filter {
+            $0.phase == .working
+                || $0.phase == .waitingPermission
+                || $0.phase == .waitingQuestion
+                || $0.phase == .planReview
+        }.count
+    }
+
+    /// Rounded Claude plan % for compact trailing (`nil` until first fetch).
+    var usagePercent: Int? { usage?.primaryPercent }
+
+    func setHookServerListening(_ listening: Bool) {
+        isHookServerListening = listening
+    }
+
+    func applyUsage(_ snapshot: ClaudeUsageSnapshot) {
+        if let current = usage,
+           current.fiveHour?.usedPercent == snapshot.fiveHour?.usedPercent,
+           current.sevenDay?.usedPercent == snapshot.sevenDay?.usedPercent
+        {
+            // Still refresh metadata quietly when source is newer oauth.
+            if snapshot.fetchedAt <= current.fetchedAt { return }
+        }
+        usage = snapshot
+        usageEpoch &+= 1
+    }
 
     /// Highest-priority / oldest decision currently needing attention.
     var attentionHead: DecisionEntry? { decisionQueue.head }
+
+    /// Highest-priority session for compact trailing click-to-jump.
+    var neediestSession: Session? {
+        if let head = attentionHead,
+           let session = sessions.first(where: { $0.id == head.key.sessionID })
+        {
+            return session
+        }
+        let live = sessions.filter { $0.phase != .done }
+        let priority: [SessionPhase] = [
+            .waitingPermission, .waitingQuestion, .planReview, .working, .idle, .error,
+        ]
+        return live.min { a, b in
+            let ia = priority.firstIndex(of: a.phase) ?? priority.count
+            let ib = priority.firstIndex(of: b.phase) ?? priority.count
+            if ia != ib { return ia < ib }
+            return a.updatedAt > b.updatedAt
+        }
+    }
 
     var pendingPermission: DecisionEntry? {
         guard let head = decisionQueue.head, head.kind == .permission else { return nil }
@@ -30,6 +97,12 @@ final class SessionStore {
         return head
     }
 
+    /// True when Claude sent permission suggestions for the Always option.
+    var permissionHasAlwaysOption: Bool {
+        guard let json = pendingPermission?.permissionSuggestionsJSON else { return false }
+        return !PermissionSuggestions.array(from: json).isEmpty
+    }
+
     var surface: NotchSurface {
         NotchSurfaceMapper.map(
             sessionCount: sessions.filter { $0.phase != .done }.count,
@@ -43,26 +116,61 @@ final class SessionStore {
         } else {
             sessions.insert(session, at: 0)
         }
+        presenceEpoch &+= 1
     }
 
     func remove(id: SessionID) {
+        let before = sessions.count
         sessions.removeAll { $0.id == id }
+        if sessions.count != before {
+            presenceEpoch &+= 1
+        }
     }
 
     func apply(envelope: HookPayload) {
         let sid = SessionID(envelope.sessionID ?? SessionID.unknown.rawValue)
+        let event = HookEventName(raw: envelope.hookEventName)
+        pruneTombstones()
+
+        // SessionEnd is the only true "remove from list" event (see SessionReducer).
+        if event == .sessionEnd {
+            remove(id: sid)
+            endedAt[sid] = Date()
+            return
+        }
+
+        if event == .sessionStart {
+            endedAt.removeValue(forKey: sid)
+            sessionStartEpoch &+= 1
+        }
+
         let existing = sessions.first(where: { $0.id == sid })
         let next: Session
         if let existing {
             next = SessionReducer.apply(session: existing, envelope: envelope)
         } else {
+            let tombstoned = SessionPresence.isTombstoned(endedAt: endedAt[sid])
+            guard SessionPresence.shouldCreateSession(
+                event: event,
+                routeKind: envelope.routeKind,
+                isTombstoned: tombstoned
+            ) else {
+                return
+            }
             next = SessionReducer.seed(from: envelope)
         }
         var enriched = next
         if let hint = TerminalHintExtractor.fromHookJSON(envelope.rawJSON) {
-            enriched.terminal = hint
+            // Merge — never wipe a good ITERM_SESSION_ID/tty when a later hook lacks it.
+            enriched.terminal = (next.terminal ?? TerminalHint()).merging(hint)
         }
         upsert(enriched)
+    }
+
+    private func pruneTombstones(now: Date = Date()) {
+        endedAt = endedAt.filter {
+            SessionPresence.isTombstoned(endedAt: $0.value, now: now)
+        }
     }
 
     func enqueuePermission(
@@ -70,6 +178,8 @@ final class SessionStore {
         toolName: String?,
         summary: String,
         hookEventName: String,
+        permissionSuggestionsJSON: Data? = nil,
+        requestedRuleContent: String? = nil,
         resume: @escaping (Data) -> Void
     ) {
         let entry = DecisionEntry(
@@ -77,7 +187,9 @@ final class SessionStore {
             kind: .permission,
             toolName: toolName,
             summary: summary,
-            hookEventName: hookEventName
+            hookEventName: hookEventName,
+            permissionSuggestionsJSON: permissionSuggestionsJSON,
+            requestedRuleContent: requestedRuleContent
         )
         enqueue(entry, resume: resume)
         syncSessionPhase(for: key.sessionID, kind: .permission, toolName: toolName)
@@ -125,15 +237,42 @@ final class SessionStore {
     }
 
     /// Resolve the currently displayed permission (queue head of kind `.permission`).
-    func resolvePermission(allow: Bool) {
+    /// - Parameter always: when true, echo Claude `permission_suggestions` as `updatedPermissions`.
+    func resolvePermission(allow: Bool, always: Bool = false) {
         guard let pending = pendingPermission else { return }
         let data: Data
         if pending.hookEventName == "PreToolUse" {
             data = allow
                 ? DecisionJSON.preToolUseAllow(reason: "Allowed from Bezel")
                 : DecisionJSON.preToolUseDeny(reason: "Denied from Bezel")
+        } else if allow {
+            let updates: [[String: Any]]?
+            if always {
+                if let json = pending.permissionSuggestionsJSON {
+                    updates = PermissionSuggestions.array(from: json)
+                    if permissionMemoryEnabled,
+                       let detail = PermissionSuggestions.alwaysAllowDetail(from: json),
+                       let tool = pending.toolName
+                    {
+                        _ = PermissionMemory.recordAlways(tool: tool, ruleContent: detail)
+                    }
+                } else if permissionMemoryEnabled,
+                          let memory = PermissionMemory.matchingSuggestions(
+                              tool: pending.toolName,
+                              ruleContent: pending.requestedRuleContent,
+                              suggestions: []
+                          )
+                {
+                    updates = memory
+                } else {
+                    updates = nil
+                }
+            } else {
+                updates = nil
+            }
+            data = DecisionJSON.permissionAllow(updatedPermissions: updates)
         } else {
-            data = allow ? DecisionJSON.permissionAllow() : DecisionJSON.permissionDeny()
+            data = DecisionJSON.permissionDeny()
         }
         complete(key: pending.key, data: data)
     }
@@ -182,7 +321,8 @@ final class SessionStore {
 
     /// Drop a timed-out decision from the queue.
     /// - Parameter signalResume: when true, invoke resume with timeout deny (UI-path cancel).
-    ///   When false, HookServer already wrote deny to the socket — only drop UI state.
+    ///   When false, HookServer already settled deny on the socket — only drop UI state.
+    ///   Resume uses the same kind-correct bytes as `DecisionTimeout` / HookServer timeout settle.
     func expireDecision(key: DecisionKey, signalResume: Bool = true) {
         guard let entry = decisionQueue.remove(key) else {
             // Already completed — still drop a leftover resume if any.
@@ -191,12 +331,14 @@ final class SessionStore {
         }
         let resume = resumes.removeValue(forKey: key)
         if signalResume {
+            // Same deny shape HookServer settles on timeout (first writer on SettledResponseBox wins).
             resume?(DecisionTimeout.denyData(for: entry))
         }
         refreshSessionAfterDecision(sessionID: key.sessionID)
     }
 
     func jump(to session: Session) {
+        _ = FlowStatsStore.recordJump()
         TerminalJumper.jump(session: session)
     }
 
@@ -240,15 +382,18 @@ final class SessionStore {
             if let toolName { updated.lastTool = toolName }
             upsert(updated)
         } else {
+            guard !SessionPresence.isTombstoned(endedAt: endedAt[sessionID]) else { return }
             let tool = toolName ?? ""
+            let sid = DecisionJSON.escapeJSONString(sessionID.rawValue)
+            let toolEscaped = DecisionJSON.escapeJSONString(tool)
             let event: String
             switch kind {
             case .planReview:
-                event = #"{"hook_event_name":"PreToolUse","session_id":"\#(sessionID.rawValue)","tool_name":"ExitPlanMode"}"#
+                event = #"{"hook_event_name":"PreToolUse","session_id":"\#(sid)","tool_name":"ExitPlanMode"}"#
             case .permission:
-                event = #"{"hook_event_name":"PermissionRequest","session_id":"\#(sessionID.rawValue)","tool_name":"\#(tool)"}"#
+                event = #"{"hook_event_name":"PermissionRequest","session_id":"\#(sid)","tool_name":"\#(toolEscaped)"}"#
             case .question:
-                event = #"{"hook_event_name":"PreToolUse","session_id":"\#(sessionID.rawValue)","tool_name":"AskUserQuestion"}"#
+                event = #"{"hook_event_name":"PreToolUse","session_id":"\#(sid)","tool_name":"AskUserQuestion"}"#
             }
             if let synthetic = try? HookPayload.parse(Data(event.utf8)) {
                 upsert(SessionReducer.seed(from: synthetic))

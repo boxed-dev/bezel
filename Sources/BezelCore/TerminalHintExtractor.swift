@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 public enum TerminalHintExtractor {
     public static func extract(from env: [String: String]) -> TerminalHint {
@@ -47,9 +48,28 @@ public enum TerminalHintExtractor {
         return fromHookObject(obj)
     }
 
+    /// Resolve the process controlling TTY path for Jump (`_tty`).
+    ///
+    /// Under agent hooks, stdin is typically a pipe, so `ttyname_r(STDIN)` fails.
+    /// Opening `/dev/tty` reaches the controlling terminal when one exists
+    /// (e.g. Terminal.app → Claude Code → bezel-bridge).
+    ///
+    /// Limitation: returns `nil` when there is no controlling terminal
+    /// (launchd/GUI-only launch, `setsid`, fully detached daemons). Callers
+    /// should fall back to `BEZEL_TTY` / `TTY` env if needed.
+    public static func resolveControllingTTY() -> String? {
+        if let name = ttyName(openingPath: "/dev/tty") { return name }
+        if let name = ttyName(fd: STDIN_FILENO) { return name }
+        if let name = ttyName(fd: STDOUT_FILENO) { return name }
+        if let name = ttyName(fd: STDERR_FILENO) { return name }
+        return nil
+    }
+
     /// Inject underscore hint keys into a bridge/hook JSON payload.
     /// Captures `_iterm_session`, `_tty`, `_tmux`/`_tmux_pane`, `_term_app` (TERM_PROGRAM),
     /// kitty, and warp focus URL for later TerminalJumper use.
+    ///
+    /// When `tty` is nil, attempts `resolveControllingTTY()`, then env `BEZEL_TTY`/`TTY`.
     public static func merge(into object: inout [String: Any], env: [String: String], tty: String? = nil) {
         let hint = extract(from: env)
         if let v = hint.termProgram { object["_term_app"] = v }
@@ -61,8 +81,24 @@ public enum TerminalHintExtractor {
         if let v = hint.warpFocusURL { object["_warp_focus_url"] = v }
         if let tty {
             object["_tty"] = tty
+        } else if let resolved = resolveControllingTTY() {
+            object["_tty"] = resolved
         } else if let v = hint.tty {
             object["_tty"] = v
         }
+    }
+
+    private static func ttyName(fd: Int32) -> String? {
+        var buf = [CChar](repeating: 0, count: 1024)
+        guard ttyname_r(fd, &buf, buf.count) == 0 else { return nil }
+        let name = String(cString: buf)
+        return name.isEmpty ? nil : name
+    }
+
+    private static func ttyName(openingPath: String) -> String? {
+        let fd = open(openingPath, O_RDONLY | O_NOCTTY)
+        guard fd >= 0 else { return nil }
+        defer { close(fd) }
+        return ttyName(fd: fd)
     }
 }

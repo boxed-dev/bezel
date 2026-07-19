@@ -156,4 +156,25 @@ struct SocketRoundtripTests {
         _ = group.wait(timeout: .now() + 2)
         #expect(echo == msg)
     }
+
+    @Test func connectMissingPathReturnsNil() {
+        let path = tempSocketPath()
+        // No listener and no socket file → connect must fail (not return a dead fd).
+        let fd = UnixSocket.connect(path: path, timeoutSeconds: 0.5)
+        #expect(fd == nil)
+    }
+
+    @Test func connectRefusedAfterClosedListenerReturnsNil() throws {
+        let path = tempSocketPath()
+        guard let listen = UnixSocket.bindListen(path: path, backlog: 2) else {
+            Issue.record("bindListen failed")
+            return
+        }
+        // Close listener but leave the path — clients should get ECONNREFUSED / SO_ERROR.
+        close(listen)
+        defer { try? FileManager.default.removeItem(atPath: path) }
+
+        let fd = UnixSocket.connect(path: path, timeoutSeconds: 1)
+        #expect(fd == nil)
+    }
 }

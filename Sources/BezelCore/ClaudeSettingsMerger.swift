@@ -19,6 +19,10 @@ public enum ClaudeSettingsMerger {
         "codeisland",
         "code-island",
         "code_island",
+        "open-island",
+        "claude-island",
+        "vibehub",
+        "vibenotch",
     ]
 
     public enum MergeError: Error, Equatable, LocalizedError {
@@ -28,7 +32,7 @@ public enum ClaudeSettingsMerger {
             switch self {
             case .competingHooks(let commands):
                 let listed = commands.joined(separator: ", ")
-                return "Competing Claude hooks detected (\(listed)). Remove vibe-island/CodeIsland hooks before connecting Bezel."
+                return "Competing Claude hooks detected (\(listed)). Remove island/notch hook tools before connecting Bezel."
             }
         }
     }
@@ -158,7 +162,7 @@ public enum ClaudeSettingsMerger {
 
     /// True when a hook command string is managed by Bezel.
     /// Exact identity only — never a bare substring match on "bezel".
-        public static func isBezelHookCommand(_ command: String) -> Bool {
+    public static func isBezelHookCommand(_ command: String) -> Bool {
         let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
         let unquoted = trimmed.trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
         if unquoted == hookCommand || unquoted == hookCommandPortable { return true }

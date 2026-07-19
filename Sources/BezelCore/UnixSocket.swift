@@ -108,6 +108,8 @@ public enum UnixSocket {
         }
     }
 
+    /// Non-blocking connect with poll(POLLOUT) + SO_ERROR check.
+    /// Returns a blocking connected fd, or nil on timeout / refused / other failure.
     public static func connect(path: String, timeoutSeconds: TimeInterval) -> Int32? {
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { return nil }
@@ -124,14 +126,27 @@ public enum UnixSocket {
                 Darwin.connect(fd, sockPtr, socklen_t(MemoryLayout<sockaddr_un>.size))
             }
         }
-        if conn < 0 && errno != EINPROGRESS {
+        if conn == 0 {
+            // Connected immediately (common for local UDS).
+            _ = fcntl(fd, F_SETFL, flags)
+            return fd
+        }
+        if errno != EINPROGRESS {
             close(fd)
             return nil
         }
 
         var pfd = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
         let ready = poll(&pfd, 1, Int32(timeoutSeconds * 1000))
-        guard ready > 0 else {
+        guard ready > 0, (Int32(pfd.revents) & Int32(POLLOUT)) != 0 else {
+            close(fd)
+            return nil
+        }
+
+        // Async connect completion: POLLOUT alone is not success — check SO_ERROR.
+        var soError: Int32 = 0
+        var len = socklen_t(MemoryLayout.size(ofValue: soError))
+        guard getsockopt(fd, SOL_SOCKET, SO_ERROR, &soError, &len) == 0, soError == 0 else {
             close(fd)
             return nil
         }

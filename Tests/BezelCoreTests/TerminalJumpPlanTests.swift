@@ -13,6 +13,16 @@ struct TerminalJumpPlanTests {
         #expect(TerminalJumpPlan.plan(for: hint) == .activateOnly)
     }
 
+    @Test func itermWithTTYUsesRevealPath() {
+        let hint = TerminalHint(termProgram: "iTerm.app", tty: "/dev/ttys001")
+        #expect(TerminalJumpPlan.plan(for: hint) == .itermReveal)
+    }
+
+    @Test func ttyOnlyUsesHunt() {
+        let hint = TerminalHint(tty: "/dev/ttys009")
+        #expect(TerminalJumpPlan.plan(for: hint) == .ttyHunt)
+    }
+
     @Test func ghostty() {
         let hint = TerminalHint(termProgram: "ghostty")
         #expect(TerminalJumpPlan.plan(for: hint) == .ghosttyFocus)

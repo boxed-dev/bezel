@@ -64,6 +64,18 @@ struct PermissionRoutingTests {
         )
         #expect(kind == .event)
     }
+
+    /// Notification+question must not block as AskUserQuestion (wrong response shape).
+    @Test func notificationWithQuestionIsEvent() {
+        let kind = PermissionRouting.routeKind(
+            hookEventName: "Notification",
+            toolName: nil,
+            source: "claude",
+            question: "Claude needs your attention"
+        )
+        #expect(kind == .event)
+        #expect(!PermissionRouting.isBlocking(kind))
+    }
 }
 
 @Suite("Event normalizer")

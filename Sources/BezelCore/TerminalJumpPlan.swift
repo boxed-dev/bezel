@@ -7,6 +7,8 @@ public enum TerminalJumpStrategy: String, Sendable, Equatable {
     case warpURL
     case kittyWindow
     case tmuxThenHost
+    /// Unknown host but we have a tty — probe Ghostty / Terminal / iTerm by tty.
+    case ttyHunt
     case activateOnly
     case unsupported
 }
@@ -26,28 +28,30 @@ public enum TerminalJumpPlan {
         let bundle = (hint.bundleID ?? "").lowercased()
 
         if program.contains("iterm") || bundle.contains("iterm") || hint.itermSession != nil {
-            // Real reveal when session id present; activateOnly only when hint is missing.
-            return hint.itermSession != nil ? .itermReveal : .activateOnly
+            if hint.itermSession != nil || hint.tty != nil {
+                return .itermReveal
+            }
+            return .activateOnly
         }
         if program.contains("ghostty") || bundle.contains("ghostty") {
-            // Always Ghostty focus path (AppleScript tty/cwd); never degrade to activateOnly.
             return .ghosttyFocus
         }
         if program.contains("apple_terminal") || program == "terminal" || bundle == "com.apple.terminal" {
             return hint.tty != nil ? .terminalTTY : .activateOnly
         }
         if program.contains("warp") || hint.warpFocusURL != nil {
-            // Warp: deep link when available; otherwise activateOnly degrade.
             return hint.warpFocusURL != nil ? .warpURL : .activateOnly
         }
         if program.contains("wezterm") || bundle.contains("wezterm") {
-            // No pane id in TerminalHint yet — activate only.
             return .activateOnly
         }
         if program.contains("kitty") || hint.kittyWindow != nil {
             return hint.kittyWindow != nil ? .kittyWindow : .activateOnly
         }
-        // Cursor / unknown hosts: activate-only degrade when we at least know a bundle/program.
+        // Have a tty but unknown host — hunt across common terminals.
+        if let tty = hint.tty, !tty.isEmpty {
+            return .ttyHunt
+        }
         if program.contains("cursor") || bundle.contains("cursor")
             || !program.isEmpty || !(hint.bundleID ?? "").isEmpty
         {

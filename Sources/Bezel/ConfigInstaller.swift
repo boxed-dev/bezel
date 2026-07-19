@@ -4,7 +4,7 @@ import BezelCore
 
 enum ConfigInstaller {
     static var bezelHome: URL {
-        URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".bezel", isDirectory: true)
+        BezelInstallState.bezelHome()
     }
 
     enum InstallResult: Equatable {
@@ -25,10 +25,19 @@ enum ConfigInstaller {
     }
 
     /// Install Claude Code hooks pointing at bezel-bridge. Safe to call repeatedly.
-    /// Fails closed if the bridge binary is not present in the app bundle.
+    /// Fails closed: probes HookServer first; writes Claude settings only after probe succeeds.
+    /// On late probe failure, rolls back Bezel hooks from settings.
     static func installClaudeHooks() async -> InstallResult {
-        let fm = FileManager.default
-        try? fm.createDirectory(at: bezelHome, withIntermediateDirectories: true)
+        // Fail closed — never leave hooks registered if the socket is dead.
+        guard SocketLiveness.probe() else {
+            let msg = "Bezel socket not answering — is the app running?"
+            NSLog("Bezel: socket liveness probe failed before install")
+            return .failure(msg)
+        }
+
+        guard BezelInstallState.ensureBezelHome() else {
+            return .failure("Could not create ~/.bezel with secure permissions.")
+        }
 
         guard let bridgeURL = locateBridgeBinary() else {
             let msg = "bezel-bridge missing from the app bundle."
@@ -40,17 +49,26 @@ enum ConfigInstaller {
             return .failure("Could not install bezel-bridge into ~/.bezel.")
         }
 
-        let dest = bezelHome.appendingPathComponent("bezel-bridge")
+        let dest = bezelHome.appendingPathComponent(BezelInstallState.bridgeFileName)
         guard writeHookScript(bridgePath: dest.path) else {
             return .failure("Could not write ~/.bezel/bezel-hook.sh.")
         }
+
+        // Explicit Connect clears prior uninstall so sync may maintain the install.
+        BezelInstallState.clearUserUninstalled()
+
         if let mergeError = mergeClaudeSettingsError() {
             return .failure(mergeError)
         }
-        // Connect succeeds only when HookServer answers an empty ping.
+
+        _ = ClaudeUsagePath.ensureCacheDirectory()
+        injectStatusLineUsageBridge()
+
+        // Belt-and-suspenders: if the socket dies during install, roll back settings.
         guard SocketLiveness.probe() else {
+            NSLog("Bezel: socket liveness probe failed after merge — rolling back hooks")
+            _ = stripClaudeSettings()
             let msg = "Bezel socket not answering — is the app running?"
-            NSLog("Bezel: socket liveness probe failed after install")
             return .failure(msg)
         }
         return .success
@@ -69,19 +87,37 @@ enum ConfigInstaller {
         return await installClaudeHooks()
     }
 
-    /// Remove Bezel hook entries from Claude settings (foreign hooks preserved).
-    /// Does not delete `~/.bezel` binaries — use `scripts/uninstall-bezel.sh` for a full wipe.
+    /// Remove Bezel hooks from Claude settings and delete managed `~/.bezel` artifacts.
+    /// Writes a durable uninstall marker so launch sync never re-merges.
     static func uninstallClaudeHooks() async -> Bool {
-        stripClaudeSettings()
+        let settingsOK = stripClaudeSettings()
+        let artifactsOK = BezelInstallState.removeManagedArtifacts()
+        let markerOK = BezelInstallState.markUserUninstalled()
+        if !settingsOK {
+            NSLog("Bezel: uninstall — settings strip failed")
+        }
+        if !artifactsOK {
+            NSLog("Bezel: uninstall — could not remove all managed ~/.bezel files")
+        }
+        if !markerOK {
+            NSLog("Bezel: uninstall — could not write user-uninstalled marker")
+        }
+        return settingsOK && markerOK
     }
 
     /// After HookServer starts: keep bridge + hook script current, and re-merge
     /// Claude settings so lifecycle hooks (SessionEnd/Stop/…) stay registered.
+    /// Never re-merges after an explicit user uninstall.
     @discardableResult
     static func syncInstalledBridgeIfNeeded() async -> Bool {
+        if BezelInstallState.isUserUninstalled() {
+            NSLog("Bezel: sync skipped — user uninstalled marker present")
+            return true
+        }
+
         let fm = FileManager.default
-        let dest = bezelHome.appendingPathComponent("bezel-bridge")
-        let hookURL = bezelHome.appendingPathComponent("bezel-hook.sh")
+        let dest = bezelHome.appendingPathComponent(BezelInstallState.bridgeFileName)
+        let hookURL = bezelHome.appendingPathComponent(BezelInstallState.hookFileName)
 
         let hasInstall = fm.fileExists(atPath: dest.path) || fm.fileExists(atPath: hookURL.path)
         guard hasInstall else {
@@ -95,7 +131,9 @@ enum ConfigInstaller {
 
         if bridgeNeedsSync(source: bridgeURL, dest: dest) {
             NSLog("Bezel: bridge version/hash mismatch — re-installing bridge + hook script")
-            try? fm.createDirectory(at: bezelHome, withIntermediateDirectories: true)
+            guard BezelInstallState.ensureBezelHome() else {
+                return false
+            }
             guard installBridge(from: bridgeURL) else {
                 return false
             }
@@ -109,7 +147,61 @@ enum ConfigInstaller {
             NSLog("Bezel: settings re-merge skipped or failed (competing hooks or I/O)")
             return false
         }
+        _ = ClaudeUsagePath.ensureCacheDirectory()
+        injectStatusLineUsageBridge()
         return true
+    }
+
+    /// Ensures Claude’s statusLine writes `rate_limits` into `~/.bezel/cache/rl.json`.
+    /// Does not replace the user’s statusLine — injects a managed bridge block.
+    @discardableResult
+    static func injectStatusLineUsageBridge() -> Bool {
+        let home = BezelInstallState.homeDirectory()
+        let statusURL = URL(fileURLWithPath: home)
+            .appendingPathComponent(".claude/statusline.sh")
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: statusURL.path),
+              var script = try? String(contentsOf: statusURL, encoding: .utf8)
+        else {
+            return false
+        }
+
+        let begin = "# ── Bezel: rate_limits bridge (managed, do not remove) ───"
+        let end = "# ── End Bezel bridge ─────────────────────────────────────"
+        let block = """
+        \(begin)
+        _bezel_rl=$(printf '%s' "$input" | /usr/bin/jq -c '.rate_limits // empty' 2>/dev/null)
+        if [ -n "$_bezel_rl" ]; then
+          mkdir -p "$HOME/.bezel/cache" 2>/dev/null
+          printf '%s\\n' "$_bezel_rl" > "$HOME/.bezel/cache/rl.json"
+        fi
+        \(end)
+        """
+
+        if script.contains(begin) {
+            // Refresh managed block in place.
+            if let startRange = script.range(of: begin),
+               let endRange = script.range(of: end)
+            {
+                let full = startRange.lowerBound..<endRange.upperBound
+                script.replaceSubrange(full, with: block.trimmingCharacters(in: .newlines))
+            } else {
+                return true
+            }
+        } else if let inputLine = script.range(of: "input=$(cat)") {
+            let insertAt = inputLine.upperBound
+            script.insert(contentsOf: "\n\n\(block)\n", at: insertAt)
+        } else {
+            script = block + "\n" + script
+        }
+
+        do {
+            try script.write(to: statusURL, atomically: true, encoding: .utf8)
+            return true
+        } catch {
+            NSLog("Bezel: statusLine usage bridge inject failed: \(error)")
+            return false
+        }
     }
 
     /// Locate bezel-bridge next to the running executable (Contents/MacOS).
@@ -137,11 +229,14 @@ enum ConfigInstaller {
 
     private static func installBridge(from bridgeURL: URL) -> Bool {
         let fm = FileManager.default
-        let dest = bezelHome.appendingPathComponent("bezel-bridge")
+        let dest = bezelHome.appendingPathComponent(BezelInstallState.bridgeFileName)
         try? fm.removeItem(at: dest)
         do {
             try fm.copyItem(at: bridgeURL, to: dest)
-            try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dest.path)
+            try fm.setAttributes(
+                [.posixPermissions: BezelInstallState.managedExecutablePermissions],
+                ofItemAtPath: dest.path
+            )
             return true
         } catch {
             NSLog("Bezel: failed to copy bridge: \(error)")
@@ -178,7 +273,7 @@ enum ConfigInstaller {
     }
 
     private static func readInstalledBridgeVersion() -> String? {
-        let marker = bezelHome.appendingPathComponent("bridge-version")
+        let marker = bezelHome.appendingPathComponent(BezelInstallState.bridgeVersionFileName)
         guard let raw = try? String(contentsOf: marker, encoding: .utf8) else { return nil }
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
@@ -186,7 +281,7 @@ enum ConfigInstaller {
 
     private static func writeInstalledBridgeVersion() {
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0"
-        let marker = bezelHome.appendingPathComponent("bridge-version")
+        let marker = bezelHome.appendingPathComponent(BezelInstallState.bridgeVersionFileName)
         try? version.write(to: marker, atomically: true, encoding: .utf8)
     }
 
@@ -204,10 +299,13 @@ enum ConfigInstaller {
         fi
         exec "$BRIDGE" --source claude "$@"
         """
-        let url = bezelHome.appendingPathComponent("bezel-hook.sh")
+        let url = bezelHome.appendingPathComponent(BezelInstallState.hookFileName)
         do {
             try script.write(to: url, atomically: true, encoding: .utf8)
-            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+            try FileManager.default.setAttributes(
+                [.posixPermissions: BezelInstallState.managedExecutablePermissions],
+                ofItemAtPath: url.path
+            )
             writeInstalledBridgeVersion()
             return true
         } catch {
@@ -283,7 +381,7 @@ enum ConfigInstaller {
     }
 
     private static var claudeSettingsURL: URL {
-        URL(fileURLWithPath: NSHomeDirectory())
+        URL(fileURLWithPath: BezelInstallState.homeDirectory())
             .appendingPathComponent(".claude/settings.json")
     }
 }
