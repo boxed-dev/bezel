@@ -7,6 +7,38 @@ public enum AgentSource: String, Codable, Sendable, CaseIterable, Hashable {
     case gemini
     case opencode
     case unknown
+
+    /// Resolve vendor source from explicit `_source` / `source`, else infer from Cursor-shaped events.
+    ///
+    /// Cursor-only hook names always win — a shared Claude hook script may stamp
+    /// `--source claude`, but `beforeShellExecution` is never emitted by Claude Code.
+    /// Claude Code inside Cursor's terminal still uses `PreToolUse` + `_source=claude`.
+    public static func resolve(raw: String?, hookEventName: String?) -> AgentSource? {
+        if let hookEventName, isCursorHookEvent(hookEventName) {
+            return .cursor
+        }
+        if let raw {
+            let key = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if let parsed = AgentSource(rawValue: key) { return parsed }
+        }
+        return nil
+    }
+
+    /// True for vendor event names that only Cursor emits (pre-normalization).
+    public static func isCursorHookEvent(_ hookEventName: String) -> Bool {
+        let rawKey = hookEventName
+            .replacingOccurrences(of: "-", with: "_")
+            .lowercased()
+            .replacingOccurrences(of: "_", with: "")
+        let cursorHints = [
+            "beforeshellexecution", "aftershellexecution",
+            "beforemcpexecution", "aftermcpexecution",
+            "afterfileedit", "beforereadfile", "beforesubmitprompt",
+            "afteragentresponse", "afteragentthought",
+            "subagentstart", "subagentstop",
+        ]
+        return cursorHints.contains(rawKey)
+    }
 }
 
 public enum SessionPhase: String, Codable, Sendable, Hashable {

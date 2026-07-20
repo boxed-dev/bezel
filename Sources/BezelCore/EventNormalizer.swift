@@ -17,6 +17,27 @@ public enum EventNormalizer {
         "permission_request": "PermissionRequest",
         "notification": "Notification",
         "stop": "Stop",
+        // Cursor agent hooks → Claude-shaped lifecycle events.
+        "beforeshellexecution": "PreToolUse",
+        "before_shell_execution": "PreToolUse",
+        "aftershellexecution": "PostToolUse",
+        "after_shell_execution": "PostToolUse",
+        "beforemcpexecution": "PreToolUse",
+        "before_mcp_execution": "PreToolUse",
+        "aftermcpexecution": "PostToolUse",
+        "after_mcp_execution": "PostToolUse",
+        "afterfileedit": "PostToolUse",
+        "after_file_edit": "PostToolUse",
+        "beforereadfile": "PreToolUse",
+        "before_read_file": "PreToolUse",
+        "beforesubmitprompt": "UserPromptSubmit",
+        "before_submit_prompt": "UserPromptSubmit",
+        "afteragentresponse": "Stop",
+        "after_agent_response": "Stop",
+        "subagentstart": "SessionStart",
+        "subagent_start": "SessionStart",
+        "subagentstop": "Stop",
+        "subagent_stop": "Stop",
     ]
 
     /// Normalize vendor event names to Claude-style PascalCase.

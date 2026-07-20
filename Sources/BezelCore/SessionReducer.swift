@@ -6,10 +6,17 @@ public enum SessionReducer {
         var next = session
         next.cwd = envelope.cwd ?? next.cwd
         next.updatedAt = now
-        if let tool = envelope.toolName { next.lastTool = tool }
-        if let detail = envelope.toolDetail { next.lastToolDetail = detail }
-        if let agent = envelope.agentType, !agent.isEmpty { next.agentType = agent }
-        if let source = envelope.source, let parsed = AgentSource(rawValue: source) {
+        if let tool = envelope.toolName, !tool.isEmpty { next.lastTool = tool }
+        // Only replace activity detail with meaningful text — never store `null` / `null;`.
+        if let detail = envelope.toolDetail, !detail.isEmpty {
+            next.lastToolDetail = detail
+        }
+        if let agent = envelope.agentType, !agent.isEmpty,
+           !DisplayNames.isSourceBrandLabel(DisplayNames.humanizeAgent(agent))
+        {
+            next.agentType = agent
+        }
+        if let parsed = AgentSource.resolve(raw: envelope.source, hookEventName: envelope.hookEventName) {
             next.source = parsed
         }
         next.title = DisplayNames.sessionTitle(
@@ -75,7 +82,10 @@ public enum SessionReducer {
 
     public static func seed(from envelope: HookPayload, now: Date = Date()) -> Session {
         let sid = SessionID(envelope.sessionID ?? SessionID.unknown.rawValue)
-        let source = AgentSource(rawValue: envelope.source ?? "claude") ?? .claude
+        let source = AgentSource.resolve(
+            raw: envelope.source,
+            hookEventName: envelope.hookEventName
+        ) ?? .claude
         let base = Session(id: sid, source: source, phase: .idle, cwd: envelope.cwd, updatedAt: now)
         return apply(session: base, envelope: envelope, now: now)
     }

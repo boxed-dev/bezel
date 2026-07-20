@@ -5,21 +5,13 @@ import Combine
 import DynamicNotchKit
 import BezelCore
 
-// MARK: - Design tokens (docs/PLAN.md visual)
+// MARK: - Design tokens (Pac-Man arcade theme — see PacManTheme.swift)
 
-private enum BezelChrome {
-    /// Near-black ink — brand ground
-    static let ink = Color(red: 0.04, green: 0.045, blue: 0.055)
-    /// Cool steel accent
-    static let steel = Color(red: 0.62, green: 0.70, blue: 0.76)
-    /// Warm tungsten — needs attention
-    static let tungsten = Color(red: 0.86, green: 0.72, blue: 0.48)
-    static let moss = Color(red: 0.48, green: 0.58, blue: 0.50)
-    static let live = Color(red: 0.42, green: 0.86, blue: 0.58)
-    static let title = Color.white.opacity(0.96)
-    static let secondary = Color.white.opacity(0.55)
-    static let tertiary = Color.white.opacity(0.34)
-    static let hairline = Color.white.opacity(0.08)
+private typealias BezelChrome = PacManTheme
+
+/// Consistent usage-meter tint across compact + expanded surfaces.
+func bezelUsageColor(_ pct: Double) -> Color {
+    PacManTheme.usageColor(pct)
 }
 
 /// Force Touch trackpad haptics (no-op on Magic Mouse / non-FT trackpads).
@@ -37,8 +29,6 @@ enum BezelHaptics {
     }
 }
 
-// MARK: - Shared view helpers
-
 /// Human label for an agent source (Claude, Codex, …).
 func bezelSourceName(_ source: AgentSource) -> String {
     switch source {
@@ -51,23 +41,14 @@ func bezelSourceName(_ source: AgentSource) -> String {
     }
 }
 
-/// Consistent usage-meter tint across compact + expanded surfaces.
-func bezelUsageColor(_ pct: Double) -> Color {
-    if pct >= 80 { return Color.red.opacity(0.9) }
-    if pct >= 50 { return BezelChrome.tungsten }
-    return BezelChrome.steel
-}
-
-/// Short display name for where a session lives (title → cwd basename → id fragment).
-func bezelSessionPlace(_ session: Session) -> String? {
-    if let title = session.title, !title.isEmpty, !DisplayNames.looksLikeSessionID(title) {
-        return title
-    }
-    if let cwd = session.cwd, !cwd.isEmpty {
-        let base = (cwd as NSString).lastPathComponent
-        if !base.isEmpty { return base }
-    }
-    return nil
+/// Short display name for where a session lives (title → cwd → agent → source).
+func bezelSessionPlace(_ session: Session) -> String {
+    DisplayNames.placeLabel(
+        sessionTitle: session.title,
+        cwd: session.cwd,
+        agentType: session.agentType,
+        sourceName: bezelSourceName(session.source)
+    )
 }
 
 /// Tracked-caps eyebrow label — sits above decision heroes to attribute the asker.
@@ -77,7 +58,7 @@ private struct Eyebrow: View {
         Text(text.uppercased())
             .font(.system(size: 10, weight: .semibold))
             .tracking(1.7)
-            .foregroundStyle(BezelChrome.tungsten.opacity(0.9))
+            .foregroundStyle(BezelChrome.pinky.opacity(0.95))
     }
 }
 
@@ -284,37 +265,20 @@ struct CompactLeading: View {
 
     var body: some View {
         let _ = store.presenceEpoch
-        ZStack {
+        Group {
             if store.needsAttention {
+                PowerPelletPulse(diameter: 11)
+            } else if store.liveActivityCount > 0 {
+                PacManChomper(diameter: 13)
+            } else if store.activeCount > 0 {
+                MiniGhost(color: BezelChrome.clyde, size: 12)
+            } else {
                 Circle()
-                    .stroke(BezelChrome.tungsten.opacity(0.55), lineWidth: 1.5)
-                    .frame(width: 12, height: 12)
-                    .scaleEffect(pulse ? 1.35 : 1.0)
-                    .opacity(pulse ? 0.15 : 0.7)
-                    .animation(
-                        .easeInOut(duration: 0.9).repeatForever(autoreverses: true),
-                        value: pulse
-                    )
+                    .fill(BezelChrome.pellet.opacity(0.35))
+                    .frame(width: 4, height: 4)
             }
-            Circle()
-                .fill(statusColor)
-                .frame(width: 7, height: 7)
-                .shadow(color: statusColor.opacity(0.55), radius: store.needsAttention ? 4 : 0)
         }
         .frame(width: 14, height: 14)
-        .onAppear { pulse = store.needsAttention }
-        .onChange(of: store.needsAttention) { _, needs in
-            pulse = needs
-        }
-    }
-
-    @State private var pulse = false
-
-    private var statusColor: Color {
-        if store.needsAttention { return BezelChrome.tungsten }
-        if store.liveActivityCount > 0 { return BezelChrome.steel }
-        if store.activeCount > 0 { return BezelChrome.moss }
-        return BezelChrome.tertiary
     }
 }
 
@@ -343,10 +307,10 @@ struct CompactTrailing: View {
     private var trailingContent: some View {
         if store.needsAttention {
             let pending = store.decisionQueue.entries.count
-            Text(pending > 1 ? "!\(pending)" : "!")
-                .font(.system(size: 11, weight: .bold, design: .rounded))
-                .foregroundStyle(BezelChrome.tungsten)
-                .monospacedDigit()
+            PacManScoreText(
+                text: pending > 1 ? "!\(pending)" : "!",
+                color: BezelChrome.blinky
+            )
         } else if let usage = store.usage {
             if UsageGlance.showsResetCountdown(usage) {
                 TimelineView(.periodic(from: .now, by: 60)) { timeline in
@@ -356,10 +320,10 @@ struct CompactTrailing: View {
                 usageTextLabel(text, usage: usage)
             }
         } else if store.liveActivityCount > 0 {
-            Text("\(store.liveActivityCount)")
-                .font(.system(size: 11, weight: .bold, design: .rounded))
-                .foregroundStyle(BezelChrome.steel)
-                .monospacedDigit()
+            PacManScoreText(
+                text: "\(store.liveActivityCount)",
+                color: BezelChrome.inky
+            )
         }
     }
 
@@ -386,10 +350,10 @@ struct CompactTrailing: View {
     }
 
     private func usageTextLabel(_ text: String, usage: ClaudeUsageSnapshot) -> some View {
-        Text(text)
-            .font(.system(size: 11, weight: .bold, design: .rounded))
-            .foregroundStyle(bezelUsageColor(Double(usage.primaryPercent ?? 0)))
-            .monospacedDigit()
+        PacManScoreText(
+            text: text,
+            color: bezelUsageColor(Double(usage.primaryPercent ?? 0))
+        )
     }
 }
 
@@ -430,23 +394,30 @@ struct ExpandedHUD: View {
     }
 
     private var islandSurface: some View {
-        RoundedRectangle(cornerRadius: 20, style: .continuous)
-            .fill(BezelChrome.ink)
-            .allowsHitTesting(false)
+        ZStack {
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(BezelChrome.maze)
+            MazePelletField(spacing: 16, opacity: 0.11)
+                .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .strokeBorder(BezelChrome.mazeWall.opacity(0.35), lineWidth: 1)
+        }
+        .allowsHitTesting(false)
     }
+
     private var atmosphere: some View {
         ZStack {
             RadialGradient(
                 colors: store.needsAttention
-                    ? [BezelChrome.tungsten.opacity(0.18), BezelChrome.tungsten.opacity(0.04), .clear]
-                    : [BezelChrome.steel.opacity(0.12), BezelChrome.steel.opacity(0.03), .clear],
+                    ? [BezelChrome.blinky.opacity(0.22), BezelChrome.pinky.opacity(0.06), .clear]
+                    : [BezelChrome.mazeWall.opacity(0.18), BezelChrome.inky.opacity(0.05), .clear],
                 center: .top,
                 startRadius: 4,
                 endRadius: 220
             )
             LinearGradient(
-                colors: [.white.opacity(0.03), .clear],
-                startPoint: .top,
+                colors: [BezelChrome.pacYellow.opacity(0.04), .clear],
+                startPoint: .topLeading,
                 endPoint: .center
             )
         }
@@ -455,30 +426,42 @@ struct ExpandedHUD: View {
 
     private var topBar: some View {
         HStack(alignment: .center, spacing: 0) {
-            Text("BEZEL")
-                .font(.system(size: 11, weight: .semibold))
-                .tracking(3.6)
-                .foregroundStyle(BezelChrome.title.opacity(store.needsAttention ? 0.42 : 0.78))
+            HStack(spacing: 6) {
+                PacManChomper(diameter: 11)
+                Text("BEZEL")
+                    .font(PacManTheme.scoreFont(size: 11, weight: .heavy))
+                    .tracking(2.8)
+                    .foregroundStyle(BezelChrome.pacYellow.opacity(store.needsAttention ? 1 : 0.88))
+            }
             Spacer(minLength: 12)
             HStack(spacing: 6) {
-                Circle()
-                    .fill(statusTint)
-                    .frame(width: 5, height: 5)
-                    .shadow(color: statusTint.opacity(0.65), radius: store.needsAttention ? 5 : 0)
+                statusIcon
                 Text(statusLabel)
-                    .font(.system(size: 10.5, weight: .medium, design: .rounded))
+                    .font(PacManTheme.scoreFont(size: 10, weight: .semibold))
                     .foregroundStyle(statusTint.opacity(0.95))
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 4.5)
             .background {
                 Capsule(style: .continuous)
-                    .fill(Color.white.opacity(0.055))
+                    .fill(BezelChrome.mazeWall.opacity(0.22))
                     .overlay {
                         Capsule(style: .continuous)
                             .strokeBorder(BezelChrome.hairline, lineWidth: 0.5)
                     }
             }
+            .help(statusHelp)
+        }
+    }
+
+    @ViewBuilder
+    private var statusIcon: some View {
+        if store.needsAttention {
+            Circle().fill(BezelChrome.powerPellet).frame(width: 5, height: 5)
+        } else if store.liveActivityCount > 0 {
+            PacManShape(mouth: 0.6).fill(BezelChrome.pacYellow).frame(width: 8, height: 8)
+        } else {
+            Circle().fill(BezelChrome.pellet.opacity(0.5)).frame(width: 4, height: 4)
         }
     }
 
@@ -487,12 +470,9 @@ struct ExpandedHUD: View {
         guard let session = store.sessions.first(where: { $0.id == entry.key.sessionID }) else {
             return "Agent"
         }
-        let agent = session.agentType.map { DisplayNames.humanizeAgent($0) }
-            ?? bezelSourceName(session.source)
-        if let place = bezelSessionPlace(session) {
-            return "\(agent) · \(place)"
-        }
-        return agent
+        let source = bezelSourceName(session.source)
+        let place = bezelSessionPlace(session)
+        return place == source ? source : "\(source) · \(place)"
     }
 
     @ViewBuilder
@@ -569,11 +549,12 @@ struct ExpandedHUD: View {
         let live = store.sessions.filter { $0.phase != .done }
         VStack(spacing: 0) {
             if live.isEmpty {
-                HStack(spacing: 0) {
-                    Text("Quiet")
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(BezelChrome.title.opacity(0.88))
-                    Text("  ·  Start an agent and we’ll meet you here.")
+                HStack(spacing: 8) {
+                    MiniGhost(color: BezelChrome.clyde, size: 18)
+                    Text("Press start")
+                        .font(PacManTheme.scoreFont(size: 14, weight: .semibold))
+                        .foregroundStyle(BezelChrome.pacYellow.opacity(0.9))
+                    Text("· run an agent in your terminal")
                         .font(.system(size: 13, weight: .regular))
                         .foregroundStyle(BezelChrome.secondary)
                     Spacer(minLength: 0)
@@ -604,10 +585,11 @@ struct ExpandedHUD: View {
                 .fill(BezelChrome.hairline)
                 .frame(height: 1)
             HStack(spacing: 16) {
-                Text("CLAUDE USAGE")
-                    .font(.system(size: 9, weight: .semibold))
-                    .tracking(1.6)
-                    .foregroundStyle(BezelChrome.tertiary)
+                Text("USAGE")
+                    .font(PacManTheme.scoreFont(size: 9, weight: .heavy))
+                    .tracking(1.4)
+                    .foregroundStyle(BezelChrome.pacYellow.opacity(0.75))
+                    .help("Claude plan usage")
                 Spacer(minLength: 8)
                 if let five = usage.fiveHour {
                     UsageMeter(label: "5h", window: five)
@@ -620,14 +602,23 @@ struct ExpandedHUD: View {
     }
 
     private var statusLabel: String {
-        if store.needsAttention { return "Needs you" }
-        if store.liveActivityCount > 0 { return "\(store.liveActivityCount) live" }
-        return "Idle"
+        if store.needsAttention { return "POWER!" }
+        if store.liveActivityCount > 0 { return "\(store.liveActivityCount)UP" }
+        return "READY"
+    }
+
+    private var statusHelp: String {
+        if store.needsAttention { return "Needs your attention" }
+        if store.liveActivityCount > 0 {
+            let n = store.liveActivityCount
+            return n == 1 ? "1 live agent" : "\(n) live agents"
+        }
+        return "No live agents"
     }
 
     private var statusTint: Color {
-        if store.needsAttention { return BezelChrome.tungsten }
-        if store.liveActivityCount > 0 { return BezelChrome.live }
+        if store.needsAttention { return BezelChrome.blinky }
+        if store.liveActivityCount > 0 { return BezelChrome.pacYellow }
         return BezelChrome.tertiary
     }
 }
@@ -642,7 +633,7 @@ private struct UsageMeter: View {
         let pct = window.usedPercent
         HStack(spacing: 7) {
             Text("\(label) \(Int(pct.rounded()))%")
-                .font(.system(size: 10.5, weight: .medium, design: .rounded))
+                .font(PacManTheme.scoreFont(size: 10, weight: .semibold))
                 .monospacedDigit()
                 .foregroundStyle(bezelUsageColor(pct))
             Capsule(style: .continuous)
@@ -688,7 +679,11 @@ struct SessionRow: View {
             onJump?()
         } label: {
             HStack(spacing: compact ? 10 : 14) {
-                PhaseDot(fill: phaseFill, alive: session.phase == .working, waiting: isWaiting)
+                PacManPhaseIcon(
+                    phase: session.phase,
+                    waiting: isWaiting,
+                    alive: session.phase == .working
+                )
 
                 Text(primaryTitle)
                     .font(.system(size: compact ? 12 : 13.5, weight: .semibold))
@@ -712,7 +707,7 @@ struct SessionRow: View {
 
                 Image(systemName: "arrow.up.right")
                     .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(hovering ? BezelChrome.steel : BezelChrome.tertiary.opacity(0.55))
+                    .foregroundStyle(hovering ? BezelChrome.pacYellow : BezelChrome.tertiary.opacity(0.55))
                     .offset(x: hovering ? 1 : -2, y: hovering ? -1 : 0)
                     .opacity(hovering ? 1 : 0.6)
             }
@@ -733,52 +728,30 @@ struct SessionRow: View {
     }
 
     private var primaryTitle: String {
-        if let title = session.title, !title.isEmpty, !DisplayNames.looksLikeSessionID(title) {
-            return title
-        }
-        if let agent = session.agentType, !agent.isEmpty {
-            return DisplayNames.humanizeAgent(agent)
-        }
-        if let cwd = session.cwd, !cwd.isEmpty {
-            let base = (cwd as NSString).lastPathComponent
-            if !base.isEmpty { return base }
-        }
-        let raw = session.id.rawValue
-        return raw.count <= 10 ? raw : String(raw.prefix(8)) + "…"
+        DisplayNames.placeLabel(
+            sessionTitle: session.title,
+            cwd: session.cwd,
+            agentType: session.agentType,
+            sourceName: bezelSourceName(session.source)
+        )
     }
 
     private var secondaryLine: String {
-        if session.phase == .waitingPermission {
-            if let detail = session.lastToolDetail, !detail.isEmpty { return clip(detail, 70) }
-            return session.lastTool.map { "Allow \($0)?" } ?? "Permission"
-        }
-        if session.phase == .waitingQuestion { return "Waiting on an answer" }
-        if session.phase == .planReview { return "Plan ready to review" }
-        if let detail = session.lastToolDetail, !detail.isEmpty { return clip(detail, 78) }
-        if let tool = session.lastTool, !tool.isEmpty { return tool }
-        switch session.phase {
-        case .working: return "Working"
-        case .idle: return "Idle"
-        case .done: return "Done"
-        case .error: return "Error"
-        default: return session.phase.rawValue
-        }
+        DisplayNames.sessionSecondaryLine(
+            phase: session.phase,
+            tool: session.lastTool,
+            detail: session.lastToolDetail
+        )
     }
 
     private var metaLine: String {
         var parts: [String] = []
-        if let agent = session.agentType, !agent.isEmpty {
-            parts.append(DisplayNames.humanizeAgent(agent))
-        } else {
-            parts.append(bezelSourceName(session.source))
-        }
-        if let term = terminalLabel { parts.append(term) }
+        let source = bezelSourceName(session.source)
+        // Prefer source over agent so meta doesn't echo primary (cwd / agent title).
+        parts.append(source)
+        if let term = terminalLabel, term != source { parts.append(term) }
         parts.append(relativeAge)
         return parts.joined(separator: " · ")
-    }
-
-    private func clip(_ value: String, _ max: Int) -> String {
-        value.count > max ? String(value.prefix(max - 1)) + "…" : value
     }
 
     private var terminalLabel: String? {
@@ -795,39 +768,6 @@ struct SessionRow: View {
 
     private var relativeAge: String {
         RelativeAge.format(since: session.updatedAt)
-    }
-
-    private var phaseFill: Color {
-        switch session.phase {
-        case .waitingPermission, .waitingQuestion, .planReview: return BezelChrome.tungsten
-        case .working: return BezelChrome.steel
-        case .done: return BezelChrome.moss
-        case .error: return .red.opacity(0.85)
-        case .idle: return BezelChrome.tertiary
-        }
-    }
-}
-
-/// Phase dot with a soft breathing pulse for live sessions.
-private struct PhaseDot: View {
-    let fill: Color
-    var alive: Bool = false
-    var waiting: Bool = false
-    @State private var pulsing = false
-
-    var body: some View {
-        Circle()
-            .fill(fill)
-            .frame(width: 6, height: 6)
-            .shadow(color: fill.opacity(waiting || alive ? 0.75 : 0), radius: 5)
-            .scaleEffect(pulsing && alive ? 1.3 : 1)
-            .opacity(pulsing && alive ? 0.72 : 1)
-            .animation(
-                alive ? .easeInOut(duration: 0.9).repeatForever(autoreverses: true) : .default,
-                value: pulsing
-            )
-            .onAppear { pulsing = alive }
-            .onChange(of: alive) { _, now in pulsing = now }
     }
 }
 
@@ -919,6 +859,17 @@ struct PlanReviewBand: View {
     let onApprove: () -> Void
     let onReject: () -> Void
 
+    @State private var expanded = false
+    @State private var loaded: PlanBodyLoader.Loaded?
+
+    private var planBody: PlanBodyLoader.Loaded {
+        loaded ?? PlanBodyLoader.load(
+            planText: pending.planText,
+            planFilePath: pending.planFilePath,
+            summary: pending.summary
+        )
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             if let attribution {
@@ -928,24 +879,9 @@ struct PlanReviewBand: View {
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(BezelChrome.title)
 
-            // Quote-style preview — full plan is one click away when it exists on disk.
-            Text(planPreview)
-                .font(.system(size: 11.5, weight: .regular, design: .monospaced))
-                .foregroundStyle(BezelChrome.secondary)
-                .lineLimit(3)
-                .truncationMode(.tail)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 9)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(Color.white.opacity(0.04))
-                }
-                .overlay {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .strokeBorder(BezelChrome.hairline, lineWidth: 0.5)
-                }
+            planCodeBox
 
+            // CTAs stay pinned below the box so expand never buries Approve/Reject.
             HStack(spacing: 4) {
                 if let path = pending.planFilePath, !path.isEmpty {
                     BezelTextAction(title: "Open plan", hint: "⌘O", key: "o") {
@@ -962,12 +898,81 @@ struct PlanReviewBand: View {
                 }
             }
         }
+        .onAppear {
+            if loaded == nil {
+                loaded = PlanBodyLoader.load(
+                    planText: pending.planText,
+                    planFilePath: pending.planFilePath,
+                    summary: pending.summary
+                )
+            }
+        }
     }
 
-    private var planPreview: String {
-        let raw = pending.planText ?? pending.summary
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.count > 280 ? String(trimmed.prefix(279)) + "…" : trimmed
+    private var planCodeBox: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Group {
+                if expanded {
+                    ScrollView(.vertical, showsIndicators: true) {
+                        planTextView(lineLimit: nil)
+                    }
+                    .frame(maxHeight: 200)
+                } else {
+                    planTextView(lineLimit: 5)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 10)
+            .padding(.bottom, 6)
+
+            HStack(spacing: 8) {
+                Button {
+                    withAnimation(.snappy(duration: 0.22)) { expanded.toggle() }
+                } label: {
+                    HStack(spacing: 5) {
+                        Text(expanded ? "Hide plan" : "Show plan")
+                            .font(.system(size: 11, weight: .semibold))
+                        Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                            .font(.system(size: 9, weight: .bold))
+                    }
+                    .foregroundStyle(BezelChrome.pacYellow.opacity(0.92))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(expanded ? "Collapse plan preview" : "Expand to read the full plan")
+
+                if planBody.truncated {
+                    Text(planBody.fromFile ? "Truncated · open file for full text" : "Truncated")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(BezelChrome.tertiary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 12)
+            .padding(.bottom, 9)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.black.opacity(0.38))
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(BezelChrome.hairline, lineWidth: 0.5)
+        }
+    }
+
+    @ViewBuilder
+    private func planTextView(lineLimit: Int?) -> some View {
+        Text(planBody.text)
+            .font(.system(size: 11, weight: .regular, design: .monospaced))
+            .foregroundStyle(Color.white.opacity(0.88))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .lineLimit(lineLimit)
+            .truncationMode(.tail)
+            .textSelection(.enabled)
+            .multilineTextAlignment(.leading)
     }
 }
 
@@ -1072,7 +1077,7 @@ struct QuestionBand: View {
                         RoundedRectangle(cornerRadius: 10, style: .continuous)
                             .strokeBorder(
                                 focusedQuestion == item.question
-                                    ? BezelChrome.steel.opacity(0.6)
+                                    ? BezelChrome.pacYellow.opacity(0.65)
                                     : BezelChrome.hairline,
                                 lineWidth: focusedQuestion == item.question ? 1 : 0.5
                             )
@@ -1159,7 +1164,7 @@ private struct OptionRow: View {
                 if selected {
                     Image(systemName: "checkmark")
                         .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(BezelChrome.steel)
+                        .foregroundStyle(BezelChrome.pacYellow)
                         .transition(.scale(scale: 0.6).combined(with: .opacity))
                 }
             }
@@ -1179,7 +1184,7 @@ private struct OptionRow: View {
         RoundedRectangle(cornerRadius: 10, style: .continuous)
             .fill(
                 selected
-                    ? BezelChrome.steel.opacity(0.14)
+                    ? BezelChrome.pacYellow.opacity(0.16)
                     : Color.white.opacity(hovering ? 0.075 : 0.045)
             )
     }
@@ -1187,7 +1192,7 @@ private struct OptionRow: View {
     private var rowStroke: some View {
         RoundedRectangle(cornerRadius: 10, style: .continuous)
             .strokeBorder(
-                selected ? BezelChrome.steel.opacity(0.55) : BezelChrome.hairline,
+                selected ? BezelChrome.pacYellow.opacity(0.65) : BezelChrome.hairline,
                 lineWidth: selected ? 1 : 0.5
             )
     }
@@ -1196,26 +1201,26 @@ private struct OptionRow: View {
     private var indicator: some View {
         if multiSelect {
             RoundedRectangle(cornerRadius: 4.5, style: .continuous)
-                .strokeBorder(selected ? BezelChrome.steel : BezelChrome.tertiary, lineWidth: 1.2)
+                .strokeBorder(selected ? BezelChrome.pacYellow : BezelChrome.tertiary, lineWidth: 1.2)
                 .background {
                     RoundedRectangle(cornerRadius: 4.5, style: .continuous)
-                        .fill(selected ? BezelChrome.steel.opacity(0.25) : .clear)
+                        .fill(selected ? BezelChrome.pacYellow.opacity(0.25) : .clear)
                 }
                 .overlay {
                     if selected {
                         Image(systemName: "checkmark")
                             .font(.system(size: 8, weight: .black))
-                            .foregroundStyle(BezelChrome.steel)
+                            .foregroundStyle(BezelChrome.maze)
                     }
                 }
                 .frame(width: 15, height: 15)
         } else {
             Circle()
-                .strokeBorder(selected ? BezelChrome.steel : BezelChrome.tertiary, lineWidth: 1.2)
+                .strokeBorder(selected ? BezelChrome.pacYellow : BezelChrome.tertiary, lineWidth: 1.2)
                 .background {
                     if selected {
                         Circle()
-                            .fill(BezelChrome.steel)
+                            .fill(BezelChrome.pacYellow)
                             .padding(3.5)
                     }
                 }
@@ -1249,7 +1254,7 @@ private struct BezelCTA: View {
             .padding(.horizontal, 18)
             .padding(.vertical, 8)
             .background { ctaSurface }
-            .shadow(color: BezelChrome.steel.opacity(hovering ? 0.55 : 0.35), radius: hovering ? 12 : 8, y: 1)
+            .shadow(color: BezelChrome.pacYellow.opacity(hovering ? 0.55 : 0.35), radius: hovering ? 12 : 8, y: 1)
             .scaleEffect(hovering ? 1.02 : 1)
             .animation(.snappy(duration: 0.16), value: hovering)
         }
@@ -1261,11 +1266,11 @@ private struct BezelCTA: View {
     private var ctaSurface: some View {
         ZStack {
             Capsule(style: .continuous)
-                .fill(BezelChrome.steel)
+                .fill(BezelChrome.pacYellow)
             Capsule(style: .continuous)
                 .fill(
                     LinearGradient(
-                        colors: [.white.opacity(0.28), .clear],
+                        colors: [.white.opacity(0.35), .clear],
                         startPoint: .top,
                         endPoint: .center
                     )
