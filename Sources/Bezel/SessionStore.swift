@@ -116,7 +116,28 @@ final class SessionStore {
         } else {
             sessions.insert(session, at: 0)
         }
+        pruneIdleSessions()
         presenceEpoch &+= 1
+    }
+
+    /// Visible in list/board — drops stale idle rows.
+    var visibleSessions: [Session] {
+        IdleSessionPrune.prune(sessions.filter { $0.phase != .done })
+    }
+
+    func attentionSessionIDs() -> Set<SessionID> {
+        var ids = Set(decisionQueue.entries.map(\.key.sessionID))
+        for s in sessions where s.phase == .waitingPermission || s.phase == .waitingQuestion || s.phase == .planReview {
+            ids.insert(s.id)
+        }
+        return ids
+    }
+
+    private func pruneIdleSessions(now: Date = Date()) {
+        let pruned = IdleSessionPrune.prune(sessions, now: now)
+        if pruned.count != sessions.count {
+            sessions = pruned
+        }
     }
 
     func remove(id: SessionID) {

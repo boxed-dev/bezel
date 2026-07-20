@@ -223,12 +223,6 @@ final class NotchController {
                     }
                 }
 
-                // Force NotchView to remeasure compact trailing when count/usage changes.
-                let usageChanged = usageEpoch != self.lastUsageEpoch
-                if (active != self.lastActiveCount || usageChanged), let notch = self.notch {
-                    notch.objectWillChange.send()
-                }
-
                 guard generation == self.attentionWatcherGeneration, self.isWatching else { return }
 
                 self.lastAttention = needs
@@ -265,20 +259,27 @@ struct CompactLeading: View {
 
     var body: some View {
         let _ = store.presenceEpoch
-        Group {
-            if store.needsAttention {
-                PowerPelletPulse(diameter: 11)
-            } else if store.liveActivityCount > 0 {
-                PacManChomper(diameter: 13)
-            } else if store.activeCount > 0 {
-                MiniGhost(color: BezelChrome.clyde, size: 12)
-            } else {
-                Circle()
-                    .fill(BezelChrome.pellet.opacity(0.35))
-                    .frame(width: 4, height: 4)
+        HStack(spacing: 6) {
+            Group {
+                if store.needsAttention {
+                    PowerPelletPulse(diameter: 11)
+                } else if store.liveActivityCount > 0 {
+                    PacManChomper(diameter: 13)
+                } else if store.activeCount > 0 {
+                    MiniGhost(color: BezelChrome.clyde, size: 12)
+                } else {
+                    Circle()
+                        .fill(BezelChrome.pellet.opacity(0.35))
+                        .frame(width: 4, height: 4)
+                }
+            }
+            .frame(width: 14, height: 14)
+
+            if !store.needsAttention, store.activeCount > 0 {
+                CompactActivityRotator(store: store)
             }
         }
-        .frame(width: 14, height: 14)
+        .frame(minWidth: store.needsAttention ? 14 : 130, alignment: .leading)
     }
 }
 
@@ -299,7 +300,8 @@ struct CompactTrailing: View {
         }
         .buttonStyle(.plain)
         .frame(minWidth: 18, minHeight: 12)
-        .animation(.snappy(duration: 0.2), value: store.usageEpoch)
+        .animation(BezelMotion.hoverSpring, value: store.presenceEpoch)
+        .animation(BezelMotion.hoverSpring, value: store.usageEpoch)
         .help(trailingHelp)
     }
 
@@ -311,7 +313,14 @@ struct CompactTrailing: View {
                 text: pending > 1 ? "!\(pending)" : "!",
                 color: BezelChrome.blinky
             )
-        } else if let usage = store.usage {
+        } else if store.activeCount > 1 {
+            CompactSessionBadge(count: store.activeCount)
+        } else if store.liveActivityCount > 0 {
+            PacManScoreText(
+                text: "\(store.liveActivityCount)",
+                color: BezelChrome.inky
+            )
+        } else if store.activeCount == 1, let usage = store.usage {
             if UsageGlance.showsResetCountdown(usage) {
                 TimelineView(.periodic(from: .now, by: 60)) { timeline in
                     usageText(usage, now: timeline.date)
@@ -319,11 +328,6 @@ struct CompactTrailing: View {
             } else if let text = UsageGlance.compactText(usage) {
                 usageTextLabel(text, usage: usage)
             }
-        } else if store.liveActivityCount > 0 {
-            PacManScoreText(
-                text: "\(store.liveActivityCount)",
-                color: BezelChrome.inky
-            )
         }
     }
 
@@ -365,6 +369,8 @@ struct CompactTrailing: View {
 
 struct ExpandedHUD: View {
     @Bindable var store: SessionStore
+    @State private var surfaceMode: HUDSurfaceMode = .list
+    @State private var showNavMenu = false
 
     var body: some View {
         ZStack {
@@ -389,8 +395,12 @@ struct ExpandedHUD: View {
             .padding(.bottom, 16)
         }
         .frame(minWidth: 580, idealWidth: 640, maxWidth: 720)
-        .animation(.spring(response: 0.42, dampingFraction: 0.88), value: store.needsAttention)
-        .animation(.spring(response: 0.36, dampingFraction: 0.9), value: store.activeCount)
+        .animation(BezelMotion.islandSpring, value: store.needsAttention)
+        .animation(BezelMotion.contentSpring, value: store.activeCount)
+        .animation(BezelMotion.contentSpring, value: surfaceMode)
+        .onChange(of: store.needsAttention) { _, needs in
+            if needs { surfaceMode = .list; showNavMenu = false }
+        }
     }
 
     private var islandSurface: some View {
@@ -425,33 +435,116 @@ struct ExpandedHUD: View {
     }
 
     private var topBar: some View {
-        HStack(alignment: .center, spacing: 0) {
-            HStack(spacing: 6) {
-                PacManChomper(diameter: 11)
-                Text("BEZEL")
-                    .font(PacManTheme.scoreFont(size: 11, weight: .heavy))
-                    .tracking(2.8)
-                    .foregroundStyle(BezelChrome.pacYellow.opacity(store.needsAttention ? 1 : 0.88))
-            }
-            Spacer(minLength: 12)
-            HStack(spacing: 6) {
-                statusIcon
-                Text(statusLabel)
-                    .font(PacManTheme.scoreFont(size: 10, weight: .semibold))
-                    .foregroundStyle(statusTint.opacity(0.95))
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 4.5)
-            .background {
-                Capsule(style: .continuous)
-                    .fill(BezelChrome.mazeWall.opacity(0.22))
-                    .overlay {
-                        Capsule(style: .continuous)
-                            .strokeBorder(BezelChrome.hairline, lineWidth: 0.5)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .center, spacing: 0) {
+                HStack(spacing: 6) {
+                    PacManChomper(diameter: 11)
+                    Text("BEZEL")
+                        .font(PacManTheme.scoreFont(size: 11, weight: .heavy))
+                        .tracking(2.8)
+                        .foregroundStyle(BezelChrome.pacYellow.opacity(store.needsAttention ? 1 : 0.88))
+                }
+                Spacer(minLength: 12)
+                metricsStripLite
+                Spacer(minLength: 8)
+                HStack(spacing: 6) {
+                    statusIcon
+                    Text(statusLabel)
+                        .font(PacManTheme.scoreFont(size: 10, weight: .semibold))
+                        .foregroundStyle(statusTint.opacity(0.95))
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4.5)
+                .background {
+                    Capsule(style: .continuous)
+                        .fill(BezelChrome.mazeWall.opacity(0.22))
+                        .overlay {
+                            Capsule(style: .continuous)
+                                .strokeBorder(BezelChrome.hairline, lineWidth: 0.5)
+                        }
+                }
+                .help(statusHelp)
+
+                if !store.needsAttention {
+                    Button {
+                        withAnimation(BezelMotion.contentSpring) { showNavMenu.toggle() }
+                    } label: {
+                        Image(systemName: "line.3.horizontal")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(PacManTheme.secondary)
                     }
+                    .buttonStyle(.plain)
+                    .popover(isPresented: $showNavMenu, arrowEdge: .bottom) {
+                        navMenu
+                            .padding(10)
+                    }
+                }
             }
-            .help(statusHelp)
+
+            if showNavMenu && !store.needsAttention {
+                EmptyView()
+            }
         }
+    }
+
+    @ViewBuilder
+    private var metricsStripLite: some View {
+        HStack(spacing: 8) {
+            if store.activeCount > 0 {
+                Text("\(store.activeCount) Sessions")
+                    .font(PacManTheme.scoreFont(size: 9, weight: .semibold))
+                    .foregroundStyle(PacManTheme.pacYellow.opacity(0.85))
+            }
+            if let usage = store.usage {
+                if let five = usage.fiveHour {
+                    metricChip("5H \(Int(five.usedPercent.rounded()))%")
+                }
+                if let seven = usage.sevenDay {
+                    metricChip("7D \(Int(seven.usedPercent.rounded()))%")
+                }
+            }
+        }
+    }
+
+    private func metricChip(_ text: String) -> some View {
+        Text(text)
+            .font(PacManTheme.scoreFont(size: 9))
+            .foregroundStyle(PacManTheme.secondary)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(PacManTheme.mazeWall.opacity(0.18), in: Capsule())
+    }
+
+    private var navMenu: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            navItem("Session list", selected: surfaceMode == .list) {
+                surfaceMode = .list
+                showNavMenu = false
+            }
+            navItem("Agent Board", selected: surfaceMode == .board) {
+                surfaceMode = .board
+                showNavMenu = false
+            }
+        }
+        .frame(minWidth: 140)
+    }
+
+    private func navItem(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack {
+                Text(title)
+                    .font(.system(size: 12, weight: selected ? .semibold : .regular))
+                Spacer()
+                if selected {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 10, weight: .bold))
+                }
+            }
+            .foregroundStyle(selected ? PacManTheme.pacYellow : PacManTheme.title)
+            .padding(.vertical, 6)
+            .padding(.horizontal, 8)
+        }
+        .buttonStyle(.plain)
     }
 
     @ViewBuilder
@@ -522,7 +615,7 @@ struct ExpandedHUD: View {
     /// Dimmed session context under an active decision — max 2 rows.
     @ViewBuilder
     private var contextStrip: some View {
-        let live = store.sessions.filter { $0.phase != .done }
+        let live = store.visibleSessions
         if live.isEmpty {
             EmptyView()
         } else {
@@ -535,10 +628,11 @@ struct ExpandedHUD: View {
                     SessionRow(
                         session: session,
                         isWaiting: store.attentionHead?.key.sessionID == session.id,
-                        compact: true
-                    ) {
-                        store.jump(to: session)
-                    }
+                        compact: true,
+                        onJump: {
+                            store.jump(to: session)
+                        }
+                    )
                 }
             }
         }
@@ -546,34 +640,70 @@ struct ExpandedHUD: View {
 
     @ViewBuilder
     private var quietBody: some View {
-        let live = store.sessions.filter { $0.phase != .done }
+        let live = store.visibleSessions
         VStack(spacing: 0) {
-            if live.isEmpty {
-                HStack(spacing: 8) {
-                    MiniGhost(color: BezelChrome.clyde, size: 18)
-                    Text("Press start")
-                        .font(PacManTheme.scoreFont(size: 14, weight: .semibold))
-                        .foregroundStyle(BezelChrome.pacYellow.opacity(0.9))
-                    Text("· run an agent in your terminal")
-                        .font(.system(size: 13, weight: .regular))
-                        .foregroundStyle(BezelChrome.secondary)
-                    Spacer(minLength: 0)
+            switch surfaceMode {
+            case .list:
+                sessionListBody(live: live)
+            case .detail(let sid):
+                if let session = store.sessions.first(where: { $0.id == sid }) {
+                    SessionDetailPanel(
+                        session: session,
+                        onBack: { withAnimation(BezelMotion.contentSpring) { surfaceMode = .list } },
+                        onJump: { store.jump(to: session) }
+                    )
+                } else {
+                    sessionListBody(live: live)
+                        .onAppear { surfaceMode = .list }
                 }
-                .padding(.vertical, 4)
-            } else {
-                VStack(spacing: 2) {
-                    ForEach(Array(live.prefix(5)), id: \.id) { session in
-                        SessionRow(session: session, compact: false) {
-                            store.jump(to: session)
+            case .board:
+                AgentBoardView(
+                    store: store,
+                    onSelect: { session in
+                        withAnimation(BezelMotion.contentSpring) {
+                            surfaceMode = .detail(session.id)
                         }
-                        .transition(.opacity)
+                    },
+                    onMinimize: {
+                        withAnimation(BezelMotion.contentSpring) { surfaceMode = .list }
                     }
-                }
+                )
             }
-            if let usage = store.usage {
+
+            if case .list = surfaceMode, let usage = store.usage {
                 usageFooter(usage)
                     .padding(.top, live.isEmpty ? 8 : 12)
                     .transition(.opacity)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func sessionListBody(live: [Session]) -> some View {
+        if live.isEmpty {
+            HStack(spacing: 8) {
+                MiniGhost(color: BezelChrome.clyde, size: 18)
+                Text("Press start")
+                    .font(PacManTheme.scoreFont(size: 14, weight: .semibold))
+                    .foregroundStyle(BezelChrome.pacYellow.opacity(0.9))
+                Text("· run an agent in your terminal")
+                    .font(.system(size: 13, weight: .regular))
+                    .foregroundStyle(BezelChrome.secondary)
+                Spacer(minLength: 0)
+            }
+            .padding(.vertical, 4)
+        } else {
+            VStack(spacing: 2) {
+                ForEach(Array(live.prefix(5)), id: \.id) { session in
+                    SessionRow(session: session, compact: false) {
+                        withAnimation(BezelMotion.contentSpring) {
+                            surfaceMode = .detail(session.id)
+                        }
+                    } onJump: {
+                        store.jump(to: session)
+                    }
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+                }
             }
         }
     }
@@ -670,15 +800,20 @@ struct SessionRow: View {
     let session: Session
     var isWaiting: Bool = false
     var compact: Bool = false
+    var onSelect: (() -> Void)?
     var onJump: (() -> Void)?
     @State private var hovering = false
 
     var body: some View {
         Button {
             BezelHaptics.alignment()
-            onJump?()
+            if let onSelect {
+                onSelect()
+            } else {
+                onJump?()
+            }
         } label: {
-            HStack(spacing: compact ? 10 : 14) {
+            HStack(spacing: compact ? 10 : 12) {
                 PacManPhaseIcon(
                     phase: session.phase,
                     waiting: isWaiting,
@@ -689,21 +824,25 @@ struct SessionRow: View {
                     .font(.system(size: compact ? 12 : 13.5, weight: .semibold))
                     .foregroundStyle(BezelChrome.title)
                     .lineLimit(1)
-                    .frame(width: compact ? 100 : 128, alignment: .leading)
+                    .frame(width: compact ? 88 : 108, alignment: .leading)
 
                 Text(secondaryLine)
-                    .font(.system(size: compact ? 11 : 12, weight: .regular, design: .default))
-                    .foregroundStyle(BezelChrome.secondary)
+                    .font(.system(size: compact ? 11 : 12, weight: .medium, design: .default))
+                    .foregroundStyle(activityColor)
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
 
-                // Live-updating meta — "now" ages into "2m" while the notch is open.
-                TimelineView(.periodic(from: .now, by: 30)) { _ in
-                    Text(metaLine)
+                if !compact {
+                    telemetryColumns
+                }
+
+                TimelineView(.periodic(from: .now, by: 30)) { timeline in
+                    Text(metaLine(now: timeline.date))
                         .font(.system(size: 10.5, weight: .medium, design: .rounded))
                         .foregroundStyle(BezelChrome.tertiary)
                         .lineLimit(1)
                 }
+                .frame(width: compact ? 72 : 88, alignment: .trailing)
 
                 Image(systemName: "arrow.up.right")
                     .font(.system(size: 9, weight: .semibold))
@@ -719,12 +858,50 @@ struct SessionRow: View {
             }
             .contentShape(Rectangle())
             .opacity(hovering ? 1 : (compact ? 0.85 : 0.94))
-            .animation(.snappy(duration: 0.18), value: hovering)
+            .animation(BezelMotion.hoverSpring, value: hovering)
         }
         .buttonStyle(.plain)
         .padding(.horizontal, -10)
         .onHover { hovering = $0 }
-        .help("Jump to session")
+        .help(onSelect == nil ? "Jump to session" : "Open session · arrow jumps to terminal")
+    }
+
+    @ViewBuilder
+    private var telemetryColumns: some View {
+        HStack(spacing: 8) {
+            if let model = session.model ?? session.agentType.map({ DisplayNames.humanizeAgent($0) }) {
+                Text(DisplayNames.humanizeAgent(model))
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(BezelChrome.secondary)
+                    .lineLimit(1)
+                    .frame(width: 56, alignment: .leading)
+            }
+            if let branch = session.gitBranch {
+                Text(branch)
+                    .font(.system(size: 10, weight: .regular, design: .monospaced))
+                    .foregroundStyle(PacManTheme.moss.opacity(0.85))
+                    .lineLimit(1)
+                    .frame(width: 52, alignment: .leading)
+            }
+            if let cost = session.costUSD {
+                Text(String(format: "$%.2f", cost))
+                    .font(PacManTheme.scoreFont(size: 10))
+                    .foregroundStyle(PacManTheme.pacYellow.opacity(0.9))
+            }
+            if let a = session.diffAdded, let r = session.diffRemoved, a + r > 0 {
+                Text("+\(a)/-\(r)")
+                    .font(PacManTheme.scoreFont(size: 9))
+                    .foregroundStyle(PacManTheme.secondary)
+            }
+        }
+    }
+
+    private var activityColor: Color {
+        ActivityTint.color(
+            phase: session.phase,
+            tool: session.lastTool,
+            detail: session.lastToolDetail
+        )
     }
 
     private var primaryTitle: String {
@@ -745,12 +922,20 @@ struct SessionRow: View {
     }
 
     private var metaLine: String {
+        metaLine(now: Date())
+    }
+
+    private func metaLine(now: Date) -> String {
         var parts: [String] = []
         let source = bezelSourceName(session.source)
-        // Prefer source over agent so meta doesn't echo primary (cwd / agent title).
         parts.append(source)
+        if let clock = RelativeAge.workingClock(since: session.updatedAt, now: now),
+           session.phase == .working || session.phase == .waitingPermission
+        {
+            parts.append(clock)
+        }
         if let term = terminalLabel, term != source { parts.append(term) }
-        parts.append(relativeAge)
+        parts.append(RelativeAge.format(since: session.updatedAt, now: now))
         return parts.joined(separator: " · ")
     }
 
@@ -764,10 +949,6 @@ struct SessionRow: View {
         if p.contains("terminal") || p.contains("apple") { return "Terminal" }
         if p.contains("vscode") || p.contains("cursor") { return "IDE" }
         return nil
-    }
-
-    private var relativeAge: String {
-        RelativeAge.format(since: session.updatedAt)
     }
 }
 

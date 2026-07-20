@@ -154,9 +154,23 @@ public struct Session: Identifiable, Codable, Sendable, Hashable {
     public var title: String?
     /// Subagent / named agent (`agent_type`), humanized for UI separately.
     public var agentType: String?
+    public var agentID: String?
+    public var model: String?
+    public var gitBranch: String?
     public var lastTool: String?
     /// Command / path / description from the latest tool_input.
     public var lastToolDetail: String?
+    public var tokensIn: Int?
+    public var tokensOut: Int?
+    public var costUSD: Double?
+    public var fileEditCount: Int?
+    public var messageCount: Int?
+    public var diffAdded: Int?
+    public var diffRemoved: Int?
+    public var lastReply: String?
+    public var todos: [SessionTodo]?
+    public var toolEvents: [ToolEvent]?
+    public var startedAt: Date?
     public var terminal: TerminalHint?
     public var updatedAt: Date
 
@@ -167,8 +181,22 @@ public struct Session: Identifiable, Codable, Sendable, Hashable {
         cwd: String? = nil,
         title: String? = nil,
         agentType: String? = nil,
+        agentID: String? = nil,
+        model: String? = nil,
+        gitBranch: String? = nil,
         lastTool: String? = nil,
         lastToolDetail: String? = nil,
+        tokensIn: Int? = nil,
+        tokensOut: Int? = nil,
+        costUSD: Double? = nil,
+        fileEditCount: Int? = nil,
+        messageCount: Int? = nil,
+        diffAdded: Int? = nil,
+        diffRemoved: Int? = nil,
+        lastReply: String? = nil,
+        todos: [SessionTodo]? = nil,
+        toolEvents: [ToolEvent]? = nil,
+        startedAt: Date? = nil,
         terminal: TerminalHint? = nil,
         updatedAt: Date = Date()
     ) {
@@ -178,8 +206,22 @@ public struct Session: Identifiable, Codable, Sendable, Hashable {
         self.cwd = cwd
         self.title = title
         self.agentType = agentType
+        self.agentID = agentID
+        self.model = model
+        self.gitBranch = gitBranch
         self.lastTool = lastTool
         self.lastToolDetail = lastToolDetail
+        self.tokensIn = tokensIn
+        self.tokensOut = tokensOut
+        self.costUSD = costUSD
+        self.fileEditCount = fileEditCount
+        self.messageCount = messageCount
+        self.diffAdded = diffAdded
+        self.diffRemoved = diffRemoved
+        self.lastReply = lastReply
+        self.todos = todos
+        self.toolEvents = toolEvents
+        self.startedAt = startedAt
         self.terminal = terminal
         self.updatedAt = updatedAt
     }

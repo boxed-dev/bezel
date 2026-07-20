@@ -15,6 +15,8 @@ public struct HookPayload: Sendable {
     public var agentID: String?
     /// Bash command / tool description from `tool_input`.
     public var toolDetail: String?
+    /// Parsed optional economics / todos from hook JSON.
+    public var telemetry: HookTelemetry?
     public var rawJSON: Data
 
     public var routeKind: RouteKind {
@@ -55,6 +57,7 @@ public struct HookPayload: Sendable {
         let agentType = string(in: obj, keys: ["agent_type", "agentType"])
         let agentID = string(in: obj, keys: ["agent_id", "agentId"])
         let toolDetail = toolDetail(from: obj)
+        let telemetry = SessionTelemetry.parse(from: obj)
 
         return HookPayload(
             hookEventName: EventNormalizer.pascalCase(event),
@@ -67,6 +70,7 @@ public struct HookPayload: Sendable {
             agentType: agentType,
             agentID: agentID,
             toolDetail: toolDetail,
+            telemetry: telemetry,
             rawJSON: data
         )
     }

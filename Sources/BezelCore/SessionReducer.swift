@@ -16,6 +16,9 @@ public enum SessionReducer {
         {
             next.agentType = agent
         }
+        if let agentID = envelope.agentID, !agentID.isEmpty {
+            next.agentID = agentID
+        }
         if let parsed = AgentSource.resolve(raw: envelope.source, hookEventName: envelope.hookEventName) {
             next.source = parsed
         }
@@ -37,11 +40,15 @@ public enum SessionReducer {
         switch event {
         case .sessionStart:
             next.phase = .working
+            next.startedAt = now
         case .stop:
             // Turn finished — keep session visible (idle), not gone.
             // SessionEnd is the only true "remove from list" event.
             if !isWaiting(next.phase) {
                 next.phase = .idle
+            }
+            if let reply = envelope.telemetry?.lastReply {
+                next.lastReply = reply
             }
         case .sessionEnd:
             next.phase = .done
@@ -68,6 +75,17 @@ public enum SessionReducer {
 
         if envelope.routeKind == .question {
             next.phase = .waitingQuestion
+        }
+
+        next.toolEvents = ToolEventRing.append(
+            next.toolEvents,
+            tool: next.lastTool,
+            detail: next.lastToolDetail,
+            now: now
+        )
+
+        if let telemetry = envelope.telemetry {
+            next = SessionTelemetry.merge(into: next, telemetry: telemetry, event: event)
         }
 
         return next
