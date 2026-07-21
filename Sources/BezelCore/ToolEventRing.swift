@@ -36,7 +36,15 @@ public enum ToolEventRing {
     }
 
     public static func eventLabel(tool: String?, detail: String?) -> String? {
-        if let summary = DisplayNames.activitySummary(tool: tool, detail: detail, maxLength: 72) {
+        // Prefer a detail-backed summary. If detail was present but junk (`null;`),
+        // do not invent a generic "Running command" from the tool name alone.
+        if let detail {
+            let trimmed = detail.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                return DisplayNames.activitySummary(tool: tool, detail: detail, maxLength: 72)
+            }
+        }
+        if let summary = DisplayNames.activitySummary(tool: tool, detail: nil, maxLength: 72) {
             return summary
         }
         if let tool, !tool.isEmpty {
