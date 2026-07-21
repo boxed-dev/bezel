@@ -93,3 +93,51 @@ struct PlanReviewEncoderTests {
         #expect(hook?["hookEventName"] as? String == "PreToolUse")
     }
 }
+
+
+@Suite("PlanBodyLoader")
+struct PlanBodyLoaderTests {
+    @Test func prefersInlinePlanOverSummary() {
+        let loaded = PlanBodyLoader.load(
+            planText: "## Do the thing\n1. Build",
+            planFilePath: nil,
+            summary: "Review plan"
+        )
+        #expect(loaded.text.contains("Do the thing"))
+        #expect(!loaded.fromFile)
+        #expect(!loaded.truncated)
+    }
+
+    @Test func loadsFromFileWhenInlineEmpty() {
+        let body = "## File plan\n- step"
+        let loaded = PlanBodyLoader.load(
+            planText: nil,
+            planFilePath: "/tmp/fake-plan.md",
+            summary: "Review plan",
+            fileContents: { _ in Data(body.utf8) }
+        )
+        #expect(loaded.text.contains("File plan"))
+        #expect(loaded.fromFile)
+    }
+
+    @Test func capsOversizedContent() {
+        let big = String(repeating: "a", count: 20_000)
+        let loaded = PlanBodyLoader.load(
+            planText: big,
+            planFilePath: nil,
+            summary: "Review plan",
+            maxBytes: 100
+        )
+        #expect(loaded.truncated)
+        #expect(loaded.text.utf8.count <= 100)
+    }
+
+    @Test func fallsBackToSummary() {
+        let loaded = PlanBodyLoader.load(
+            planText: nil,
+            planFilePath: nil,
+            summary: "Review plan"
+        )
+        #expect(loaded.text == "Review plan")
+    }
+}

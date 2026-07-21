@@ -25,15 +25,20 @@ enum BezelSound {
         let notes: [(freq: Double, ms: Int)]
         switch kind {
         case .attention:
-            notes = [(523.25, 55), (659.25, 55), (783.99, 95)]
+            // Power-pellet siren — urgent alternating blips
+            notes = [(880.0, 32), (1174.66, 32), (880.0, 32), (1174.66, 32), (1318.51, 85)]
         case .allow:
-            notes = [(987.77, 45), (1318.51, 100)]
+            // Fruit bonus — ascending pickup jingle
+            notes = [(523.25, 38), (659.25, 38), (783.99, 38), (1046.5, 90)]
         case .deny:
-            notes = [(196.0, 70), (146.83, 110)]
+            // Ghost retreat — low descending tone
+            notes = [(220.0, 55), (164.81, 55), (123.47, 95)]
         case .sessionUp:
-            notes = [(392.0, 40), (523.25, 70)]
+            // Waka cadence — agent came online
+            notes = [(392.0, 28), (293.66, 28), (392.0, 28), (293.66, 28)]
         case .done:
-            notes = [(659.25, 45), (523.25, 45), (392.0, 75)]
+            // Level clear — short victory fanfare
+            notes = [(523.25, 42), (659.25, 42), (783.99, 42), (1046.5, 95)]
         }
 
         DispatchQueue.global(qos: .userInitiated).async {

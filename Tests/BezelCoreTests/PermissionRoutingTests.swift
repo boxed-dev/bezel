@@ -86,6 +86,23 @@ struct EventNormalizerTests {
         #expect(EventNormalizer.pascalCase("PermissionRequest") == "PermissionRequest")
         #expect(EventNormalizer.pascalCase("sessionStart") == "SessionStart")
     }
+
+    @Test func mapsCursorShellHooks() {
+        #expect(EventNormalizer.pascalCase("beforeShellExecution") == "PreToolUse")
+        #expect(EventNormalizer.pascalCase("afterShellExecution") == "PostToolUse")
+        #expect(EventNormalizer.pascalCase("beforeSubmitPrompt") == "UserPromptSubmit")
+        #expect(EventNormalizer.pascalCase("afterAgentResponse") == "Stop")
+        #expect(EventNormalizer.pascalCase("stop") == "Stop")
+    }
+
+    @Test func agentSourceInfersCursorFromVendorEvents() {
+        #expect(AgentSource.resolve(raw: nil, hookEventName: "beforeShellExecution") == .cursor)
+        // Shared Claude hook scripts may stamp `--source claude`; Cursor events still win.
+        #expect(AgentSource.resolve(raw: "claude", hookEventName: "beforeShellExecution") == .cursor)
+        #expect(AgentSource.resolve(raw: nil, hookEventName: "SessionStart") == nil)
+        #expect(AgentSource.resolve(raw: "claude", hookEventName: "PreToolUse") == .claude)
+        #expect(AgentSource.resolve(raw: "cursor", hookEventName: "Stop") == .cursor)
+    }
 }
 
 @Suite("Hook payload")

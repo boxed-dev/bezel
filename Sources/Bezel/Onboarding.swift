@@ -47,18 +47,18 @@ struct OnboardingRoot: View {
     let onDone: () -> Void
     @State private var flow = OnboardingStateModel()
 
-    private let accent = Color(red: 0.55, green: 0.64, blue: 0.71)
-    private let danger = Color(red: 0.85, green: 0.45, blue: 0.4)
+    private let accent = PacManTheme.pacYellow
+    private let danger = PacManTheme.blinky
 
     var body: some View {
         ZStack {
-            LinearGradient(
-                colors: [
-                    Color(red: 0.027, green: 0.031, blue: 0.039),
-                    Color(red: 0.07, green: 0.078, blue: 0.102),
-                ],
-                startPoint: .top,
-                endPoint: .bottom
+            PacManTheme.maze.ignoresSafeArea()
+            MazePelletField(spacing: 18, opacity: 0.07).ignoresSafeArea()
+            RadialGradient(
+                colors: [PacManTheme.mazeWall.opacity(0.28), .clear],
+                center: .top,
+                startRadius: 20,
+                endRadius: 420
             )
             .ignoresSafeArea()
 
@@ -369,17 +369,17 @@ private struct WelcomeStepView: View {
 
     var body: some View {
         VStack(spacing: 20) {
-            NotchGlyph()
-                .frame(width: 120, height: 30)
+            PacManNotchMark(width: 140, height: 34)
                 .scaleEffect(breathing ? 1.05 : 1)
                 .opacity(breathing ? 0.95 : 0.7)
                 .animation(.easeInOut(duration: 1.6).repeatForever(autoreverses: true), value: breathing)
-            Text("Bezel")
-                .font(.system(size: 42, weight: .semibold))
-                .tracking(4)
-            Text("Your agents, at the edge of the screen.")
+            Text("BEZEL")
+                .font(PacManTheme.scoreFont(size: 40, weight: .heavy))
+                .tracking(6)
+                .foregroundStyle(PacManTheme.pacYellow)
+            Text("Your agents live in the notch — chomp when busy, ghosts when they need you.")
                 .font(.system(size: 16))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(PacManTheme.secondary)
                 .multilineTextAlignment(.center)
         }
         .opacity(appeared ? 1 : 0)
@@ -395,23 +395,21 @@ private struct WelcomeStepView: View {
 private struct GlanceStepView: View {
     @State private var shownRows = 0
 
-    private let accent = Color(red: 0.55, green: 0.64, blue: 0.71)
-
     var body: some View {
         VStack(alignment: .leading, spacing: 24) {
             VStack(alignment: .leading, spacing: 10) {
-                Text("When an agent needs you, Bezel opens from the notch.")
+                Text("When an agent needs you, the notch powers up.")
                     .font(.system(size: 22, weight: .semibold))
                     .fixedSize(horizontal: false, vertical: true)
-                Text("When it doesn’t, it disappears.")
+                Text("When it doesn’t, Bezel stays quiet in the maze.")
                     .font(.system(size: 15))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(PacManTheme.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             VStack(alignment: .leading, spacing: 10) {
-                phaseDemo("Working", color: accent, index: 0)
-                phaseDemo("Waiting", color: Color(red: 0.77, green: 0.65, blue: 0.45), index: 1)
-                phaseDemo("Done", color: Color(red: 0.45, green: 0.55, blue: 0.48), index: 2)
+                phaseDemo("Working", icon: AnyView(PacManChomper(diameter: 14)), index: 0)
+                phaseDemo("Waiting", icon: AnyView(MiniGhost(color: PacManTheme.pinky, size: 14, waiting: true)), index: 1)
+                phaseDemo("Done", icon: AnyView(MiniGhost(color: PacManTheme.moss, size: 14)), index: 2)
             }
         }
         .onAppear {
@@ -424,17 +422,16 @@ private struct GlanceStepView: View {
         }
     }
 
-    private func phaseDemo(_ label: String, color: Color, index: Int) -> some View {
+    private func phaseDemo(_ label: String, icon: AnyView, index: Int) -> some View {
         HStack(spacing: 10) {
-            Circle().fill(color).frame(width: 8, height: 8)
-                .shadow(color: color.opacity(0.5), radius: 3)
+            icon.frame(width: 16, height: 16)
             Text(label)
                 .font(.system(size: 14, weight: .medium))
             Spacer()
         }
         .padding(.vertical, 8)
         .padding(.horizontal, 12)
-        .background(.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .background(PacManTheme.mazeWall.opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .opacity(shownRows > index ? 1 : 0)
         .offset(x: shownRows > index ? 0 : -8)
     }
@@ -450,8 +447,8 @@ private struct ProgressDots: View {
             ForEach(0..<total, id: \.self) { i in
                 Capsule(style: .continuous)
                     .fill(i == current
-                        ? Color(red: 0.55, green: 0.64, blue: 0.71)
-                        : Color.white.opacity(i < current ? 0.22 : 0.12))
+                        ? PacManTheme.pacYellow
+                        : PacManTheme.pellet.opacity(i < current ? 0.35 : 0.14))
                     .frame(width: i == current ? 16 : 5, height: 5)
             }
         }
@@ -462,12 +459,7 @@ private struct ProgressDots: View {
 
 struct NotchGlyph: View {
     var body: some View {
-        Capsule()
-            .fill(.white.opacity(0.12))
-            .overlay {
-                Capsule()
-                    .strokeBorder(.white.opacity(0.2), lineWidth: 0.5)
-            }
+        PacManNotchMark()
     }
 }
 
@@ -488,7 +480,7 @@ struct DetectedAgentsList: View {
             Spacer()
             Text(found ? "Found" : "Not found")
                 .font(.system(size: 12))
-                .foregroundStyle(found ? Color(red: 0.55, green: 0.64, blue: 0.71) : .secondary)
+                .foregroundStyle(found ? PacManTheme.pacYellow : .secondary)
         }
         .padding(.vertical, 8)
         .padding(.horizontal, 12)
@@ -499,14 +491,15 @@ struct DetectedAgentsList: View {
 struct BezelPrimaryButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 14, weight: .semibold))
+            .font(PacManTheme.scoreFont(size: 14, weight: .heavy))
             .padding(.horizontal, 20)
             .padding(.vertical, 10)
             .background(
-                Color(red: 0.55, green: 0.64, blue: 0.71).opacity(configuration.isPressed ? 0.7 : 1),
+                PacManTheme.pacYellow.opacity(configuration.isPressed ? 0.75 : 1),
                 in: Capsule()
             )
-            .foregroundStyle(Color(red: 0.07, green: 0.08, blue: 0.1))
+            .foregroundStyle(PacManTheme.maze)
+            .shadow(color: PacManTheme.pacYellow.opacity(0.35), radius: configuration.isPressed ? 4 : 8, y: 1)
     }
 }
 

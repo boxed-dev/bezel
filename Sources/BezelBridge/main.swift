@@ -43,6 +43,11 @@ enum BezelBridgeMain {
             exit(0)
         }
 
+        // Capture vendor event name before PascalCase normalization (Cursor inference needs it).
+        let rawEventName = (obj["hook_event_name"] as? String)
+            ?? (obj["hookEventName"] as? String)
+            ?? eventOverride
+
         if let eventOverride {
             obj["hook_event_name"] = EventNormalizer.pascalCase(eventOverride)
         } else if let existing = obj["hook_event_name"] as? String {
@@ -52,10 +57,14 @@ enum BezelBridgeMain {
         }
 
         let env = ProcessInfo.processInfo.environment
-        if let sourceOverride {
-            obj["_source"] = sourceOverride
+        // Cursor-shaped vendor events win over `--source claude` from a shared hook script.
+        let explicitSource = sourceOverride ?? (obj["_source"] as? String)
+        if let resolved = AgentSource.resolve(raw: explicitSource, hookEventName: rawEventName),
+           resolved != .unknown
+        {
+            obj["_source"] = resolved.rawValue
         } else if obj["_source"] == nil {
-            obj["_source"] = "claude"
+            obj["_source"] = explicitSource ?? "claude"
         }
 
         obj["_ppid"] = Int(getppid())

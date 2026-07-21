@@ -8,10 +8,6 @@ struct SettingsView: View {
     @State private var hooksStatus = ""
     @State private var hooksStatusOK = false
 
-    private let accent = Color(red: 0.55, green: 0.64, blue: 0.71)
-    private let danger = Color(red: 0.85, green: 0.45, blue: 0.4)
-    private let okGreen = Color(red: 0.5, green: 0.72, blue: 0.56)
-
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -19,18 +15,20 @@ struct SettingsView: View {
                 Section("Status") {
                     LabeledContent("Socket") {
                         Text(SocketPath.resolve())
-                            .font(.system(size: 11, design: .monospaced))
+                            .font(PacManTheme.scoreFont(size: 11, weight: .regular))
                             .foregroundStyle(.secondary)
                             .textSelection(.enabled)
                     }
                     LabeledContent("Active sessions") {
                         Text("\(store.activeCount)")
+                            .font(PacManTheme.scoreFont(size: 13))
                             .monospacedDigit()
+                            .foregroundStyle(PacManTheme.pacYellow)
                     }
                     if let usage = store.usage {
                         LabeledContent("Claude usage") {
                             Text(usage.helpText)
-                                .font(.system(size: 11, weight: .medium, design: .rounded))
+                                .font(PacManTheme.scoreFont(size: 11, weight: .semibold))
                                 .monospacedDigit()
                                 .foregroundStyle(usageTint(usage))
                         }
@@ -41,7 +39,7 @@ struct SettingsView: View {
                             systemImage: "exclamationmark.triangle.fill"
                         )
                         .font(.system(size: 11))
-                        .foregroundStyle(danger)
+                        .foregroundStyle(PacManTheme.blinky)
                     }
                 }
                 Section("General") {
@@ -55,10 +53,10 @@ struct SettingsView: View {
                     if !launchAtLoginError.isEmpty {
                         Text(launchAtLoginError)
                             .font(.system(size: 11))
-                            .foregroundStyle(danger)
+                            .foregroundStyle(PacManTheme.blinky)
                     }
                     Toggle(
-                        "Sound alerts",
+                        "Arcade sound alerts",
                         isOn: Binding(
                             get: { BezelSound.isEnabled },
                             set: { BezelSound.isEnabled = $0 }
@@ -109,7 +107,7 @@ struct SettingsView: View {
                     if !hooksStatus.isEmpty {
                         Label(hooksStatus, systemImage: hooksStatusOK ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
                             .font(.system(size: 11))
-                            .foregroundStyle(hooksStatusOK ? okGreen : danger)
+                            .foregroundStyle(hooksStatusOK ? PacManTheme.moss : PacManTheme.blinky)
                     }
                 }
                 Section("Onboarding") {
@@ -122,33 +120,46 @@ struct SettingsView: View {
             .formStyle(.grouped)
         }
         .frame(width: 460, height: 520)
+        .preferredColorScheme(.dark)
         .onAppear {
             launchAtLoginEnabled = LaunchAtLogin.isEnabled
         }
     }
 
-    /// Brand strip — glyph, wordmark, version. Makes Settings feel like Bezel, not a system panel.
     private var header: some View {
-        HStack(spacing: 12) {
-            NotchGlyph()
-                .frame(width: 64, height: 16)
-            VStack(alignment: .leading, spacing: 1) {
-                Text("Bezel")
-                    .font(.system(size: 14, weight: .semibold))
-                Text(versionLabel)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.tertiary)
-            }
-            Spacer()
-            Circle()
-                .fill(store.listenFailed ? danger : okGreen)
-                .frame(width: 7, height: 7)
-                .shadow(color: (store.listenFailed ? danger : okGreen).opacity(0.5), radius: 3)
+        ZStack {
+            PacManTheme.maze
+            MazePelletField(spacing: 14, opacity: 0.08)
+            LinearGradient(
+                colors: [PacManTheme.mazeWall.opacity(0.35), .clear],
+                startPoint: .leading,
+                endPoint: .trailing
+            )
+            HStack(spacing: 12) {
+                PacManNotchMark(width: 72, height: 18)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("BEZEL")
+                        .font(PacManTheme.scoreFont(size: 13, weight: .heavy))
+                        .tracking(2.2)
+                        .foregroundStyle(PacManTheme.pacYellow)
+                    Text(versionLabel)
+                        .font(.system(size: 11))
+                        .foregroundStyle(PacManTheme.secondary)
+                }
+                Spacer()
+                Group {
+                    if store.listenFailed {
+                        PowerPelletPulse(diameter: 8)
+                    } else {
+                        PacManChomper(diameter: 10)
+                    }
+                }
                 .help(store.listenFailed ? "Hook socket not listening" : "Listening for agent hooks")
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 14)
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 14)
-        .background(.bar)
+        .frame(height: 56)
     }
 
     private var versionLabel: String {
@@ -163,10 +174,7 @@ struct SettingsView: View {
     }
 
     private func usageTint(_ usage: ClaudeUsageSnapshot) -> Color {
-        let pct = Double(usage.primaryPercent ?? 0)
-        if pct >= 80 { return danger }
-        if pct >= 50 { return Color(red: 0.86, green: 0.72, blue: 0.48) }
-        return accent
+        PacManTheme.usageColor(Double(usage.primaryPercent ?? 0))
     }
 
     private func setLaunchAtLogin(_ enabled: Bool) {

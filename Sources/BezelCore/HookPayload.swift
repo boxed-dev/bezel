@@ -15,6 +15,8 @@ public struct HookPayload: Sendable {
     public var agentID: String?
     /// Bash command / tool description from `tool_input`.
     public var toolDetail: String?
+    /// Parsed optional economics / todos from hook JSON.
+    public var telemetry: HookTelemetry?
     public var rawJSON: Data
 
     public var routeKind: RouteKind {
@@ -36,19 +38,26 @@ public struct HookPayload: Sendable {
         ]) ?? "Unknown"
 
         let session = string(in: obj, keys: [
-            "session_id", "sessionId", "conversationId",
+            "session_id", "sessionId", "conversation_id", "conversationId",
         ])
 
         let tool = string(in: obj, keys: ["tool_name", "toolName"])
             ?? nestedString(obj, path: ["toolCall", "name"])
 
         let cwd = string(in: obj, keys: ["cwd"])
-        let source = string(in: obj, keys: ["_source", "source"])
+            ?? firstWorkspaceRoot(obj)
+        // Resolve against the raw vendor event name (before PascalCase normalization).
+        // Cursor-shaped events win over a stale `_source=claude` stamp.
+        let source = AgentSource.resolve(
+            raw: string(in: obj, keys: ["_source", "source"]),
+            hookEventName: event
+        )?.rawValue
         let question = string(in: obj, keys: ["question"])
         let sessionTitle = string(in: obj, keys: ["session_title", "sessionTitle"])
         let agentType = string(in: obj, keys: ["agent_type", "agentType"])
         let agentID = string(in: obj, keys: ["agent_id", "agentId"])
         let toolDetail = toolDetail(from: obj)
+        let telemetry = SessionTelemetry.parse(from: obj)
 
         return HookPayload(
             hookEventName: EventNormalizer.pascalCase(event),
@@ -61,6 +70,7 @@ public struct HookPayload: Sendable {
             agentType: agentType,
             agentID: agentID,
             toolDetail: toolDetail,
+            telemetry: telemetry,
             rawJSON: data
         )
     }
@@ -73,15 +83,46 @@ public struct HookPayload: Sendable {
     }
 
     private static func toolDetail(from obj: [String: Any]) -> String? {
+        // Cursor shell hooks put `command` at the top level (not under tool_input).
+        if let top = meaningfulDetail(obj["command"] as? String) { return top }
+
         let input = (obj["tool_input"] as? [String: Any])
             ?? (obj["toolInput"] as? [String: Any])
-        guard let input else { return nil }
-        if let command = input["command"] as? String, !command.isEmpty { return command }
-        if let desc = input["description"] as? String, !desc.isEmpty { return desc }
-        if let file = input["file_path"] as? String ?? input["filePath"] as? String, !file.isEmpty {
-            return (file as NSString).lastPathComponent
+        if let input {
+            if let command = meaningfulDetail(input["command"] as? String) { return command }
+            if let desc = meaningfulDetail(input["description"] as? String) { return desc }
+            if let file = meaningfulDetail(input["file_path"] as? String)
+                ?? meaningfulDetail(input["filePath"] as? String)
+            {
+                return (file as NSString).lastPathComponent
+            }
         }
         return nil
+    }
+
+    /// Reject empty / placeholder serializer junk (`null`, `null;`, bare `;`).
+    private static func meaningfulDetail(_ value: String?) -> String? {
+        guard var t = value?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty else {
+            return nil
+        }
+        while t.hasSuffix(";") {
+            t = String(t.dropLast()).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        guard !t.isEmpty else { return nil }
+        let lower = t.lowercased()
+        if ["null", "nil", "none", "undefined", "n/a", "na", "(null)", "<null>"].contains(lower) {
+            return nil
+        }
+        return t
+    }
+
+    private static func firstWorkspaceRoot(_ obj: [String: Any]) -> String? {
+        let roots = (obj["workspace_roots"] as? [String])
+            ?? (obj["workspaceRoots"] as? [String])
+        guard let root = roots?.first?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !root.isEmpty
+        else { return nil }
+        return root
     }
 
     private static func nestedString(_ obj: [String: Any], path: [String]) -> String? {

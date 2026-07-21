@@ -6,10 +6,20 @@ public enum SessionReducer {
         var next = session
         next.cwd = envelope.cwd ?? next.cwd
         next.updatedAt = now
-        if let tool = envelope.toolName { next.lastTool = tool }
-        if let detail = envelope.toolDetail { next.lastToolDetail = detail }
-        if let agent = envelope.agentType, !agent.isEmpty { next.agentType = agent }
-        if let source = envelope.source, let parsed = AgentSource(rawValue: source) {
+        if let tool = envelope.toolName, !tool.isEmpty { next.lastTool = tool }
+        // Only replace activity detail with meaningful text — never store `null` / `null;`.
+        if let detail = envelope.toolDetail, !detail.isEmpty {
+            next.lastToolDetail = detail
+        }
+        if let agent = envelope.agentType, !agent.isEmpty,
+           !DisplayNames.isSourceBrandLabel(DisplayNames.humanizeAgent(agent))
+        {
+            next.agentType = agent
+        }
+        if let agentID = envelope.agentID, !agentID.isEmpty {
+            next.agentID = agentID
+        }
+        if let parsed = AgentSource.resolve(raw: envelope.source, hookEventName: envelope.hookEventName) {
             next.source = parsed
         }
         next.title = DisplayNames.sessionTitle(
@@ -30,11 +40,15 @@ public enum SessionReducer {
         switch event {
         case .sessionStart:
             next.phase = .working
+            next.startedAt = now
         case .stop:
             // Turn finished — keep session visible (idle), not gone.
             // SessionEnd is the only true "remove from list" event.
             if !isWaiting(next.phase) {
                 next.phase = .idle
+            }
+            if let reply = envelope.telemetry?.lastReply {
+                next.lastReply = reply
             }
         case .sessionEnd:
             next.phase = .done
@@ -63,6 +77,17 @@ public enum SessionReducer {
             next.phase = .waitingQuestion
         }
 
+        next.toolEvents = ToolEventRing.append(
+            next.toolEvents,
+            tool: next.lastTool,
+            detail: next.lastToolDetail,
+            now: now
+        )
+
+        if let telemetry = envelope.telemetry {
+            next = SessionTelemetry.merge(into: next, telemetry: telemetry, event: event)
+        }
+
         return next
     }
 
@@ -75,7 +100,10 @@ public enum SessionReducer {
 
     public static func seed(from envelope: HookPayload, now: Date = Date()) -> Session {
         let sid = SessionID(envelope.sessionID ?? SessionID.unknown.rawValue)
-        let source = AgentSource(rawValue: envelope.source ?? "claude") ?? .claude
+        let source = AgentSource.resolve(
+            raw: envelope.source,
+            hookEventName: envelope.hookEventName
+        ) ?? .claude
         let base = Session(id: sid, source: source, phase: .idle, cwd: envelope.cwd, updatedAt: now)
         return apply(session: base, envelope: envelope, now: now)
     }

@@ -103,6 +103,117 @@ struct SessionReducerTests {
         #expect(s.id.rawValue == "unknown")
     }
 
+    @Test func cursorShellHookIsNotLabeledClaude() throws {
+        let env = try payload(#"""
+        {
+          "hook_event_name":"beforeShellExecution",
+          "conversation_id":"conv-cursor-1",
+          "command":"null;",
+          "workspace_roots":["/Users/x/Vibe"]
+        }
+        """#)
+        let s = SessionReducer.seed(from: env)
+        #expect(s.source == .cursor)
+        #expect(s.id.rawValue == "conv-cursor-1")
+        #expect(s.cwd == "/Users/x/Vibe")
+        #expect(s.lastToolDetail == nil)
+        #expect(s.title == "Vibe")
+        #expect(
+            DisplayNames.placeLabel(
+                sessionTitle: s.title,
+                cwd: s.cwd,
+                agentType: s.agentType,
+                sourceName: "Cursor"
+            ) == "Vibe"
+        )
+        #expect(DisplayNames.activitySummary(tool: s.lastTool, detail: s.lastToolDetail) == nil)
+    }
+
+    @Test func cursorShapedEventWinsOverClaudeSourceStamp() throws {
+        let env = try payload(#"""
+        {
+          "hook_event_name":"beforeShellExecution",
+          "conversation_id":"c1",
+          "command":"echo hi",
+          "agent_type":"Claude",
+          "_source":"claude"
+        }
+        """#)
+        let s = SessionReducer.seed(from: env)
+        #expect(s.source == .cursor)
+        #expect(s.agentType == nil)
+        #expect(s.lastToolDetail == "echo hi")
+        #expect(
+            DisplayNames.placeLabel(
+                sessionTitle: s.title,
+                cwd: s.cwd,
+                agentType: s.agentType,
+                sourceName: "Cursor"
+            ) != "Claude"
+        )
+    }
+
+    @Test func deadCursorSessionDoesNotShowRunningNull() throws {
+        let env = try payload(#"""
+        {
+          "hook_event_name":"beforeShellExecution",
+          "conversation_id":"dead-1",
+          "command":"null;",
+          "agent_type":"Claude",
+          "workspace_roots":["/Users/x/Vibe"],
+          "_source":"claude"
+        }
+        """#)
+        var s = SessionReducer.seed(from: env)
+        #expect(s.source == .cursor)
+        #expect(s.phase == .working)
+        #expect(s.lastToolDetail == nil)
+
+        // Simulate turn finished / stale row.
+        s.phase = .idle
+        s.lastToolDetail = "null;" // leftover junk from an older build
+        s.agentType = "Claude"
+
+        let primary = DisplayNames.placeLabel(
+            sessionTitle: s.title,
+            cwd: s.cwd,
+            agentType: s.agentType,
+            sourceName: "Cursor"
+        )
+        #expect(primary == "Vibe")
+        #expect(primary != "Claude")
+
+        let secondary = DisplayNames.sessionSecondaryLine(
+            phase: s.phase,
+            tool: "Bash",
+            detail: s.lastToolDetail
+        )
+        #expect(secondary == "Idle")
+        #expect(!secondary.lowercased().contains("running"))
+        #expect(!secondary.lowercased().contains("null"))
+
+        s.phase = .done
+        #expect(
+            DisplayNames.sessionSecondaryLine(
+                phase: s.phase,
+                tool: "Bash",
+                detail: "null;"
+            ) == "Done"
+        )
+    }
+
+    @Test func accumulatesToolEventsAndTelemetry() throws {
+        var s = Session(id: SessionID("s1"), phase: .working)
+        let env = try payload(
+            #"{"hook_event_name":"PostToolUse","session_id":"s1","tool_name":"Read","model":"opus-4","tokens_in":100,"tokens_out":50,"cost_usd":0.12,"git_branch":"feature-x"}"#
+        )
+        s = SessionReducer.apply(session: s, envelope: env)
+        #expect(s.model == "opus-4")
+        #expect(s.tokensIn == 100)
+        #expect(s.gitBranch == "feature-x")
+        #expect(s.toolEvents?.isEmpty == false)
+    }
+
     private func payload(_ json: String) throws -> HookPayload {
         try HookPayload.parse(Data(json.utf8))
     }
