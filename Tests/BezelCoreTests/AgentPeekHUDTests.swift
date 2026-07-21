@@ -27,10 +27,11 @@ struct ToolEventRingTests {
     @Test func appendsAndCaps() {
         var ring: [ToolEvent] = []
         for i in 0..<30 {
-            ring = ToolEventRing.append(ring, tool: "Bash", detail: "cmd \(i)")
+            // Distinct scripts so summaries don’t collapse to the same label.
+            ring = ToolEventRing.append(ring, tool: "Bash", detail: "bash scripts/step-\(i).sh")
         }
         #expect(ring.count == ToolEventRing.maxEvents)
-        #expect(ring.first?.label.contains("cmd 29") == true)
+        #expect(ring.first?.label.contains("step-29") == true)
     }
 
     @Test func rejectsNullJunk() {
