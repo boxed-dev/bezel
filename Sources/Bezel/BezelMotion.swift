@@ -31,7 +31,7 @@ enum ActivityTint {
         case .working:
             break
         }
-        let kind = toolKind(tool, detail: detail ?? "")
+        let kind = toolKind(tool ?? "", detail: detail ?? "")
         switch kind {
         case .shell: return PacManTheme.inky
         case .edit: return PacManTheme.moss
