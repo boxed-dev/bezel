@@ -1,0 +1,31 @@
+name: Package Bezel.app
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+
+      - name: swift test
+        run: swift test
+
+      - name: Package Bezel.app
+        run: bash scripts/package-bezel.sh
+
+      - name: Upload Bezel.app zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: Bezel.app
+          path: dist/Bezel.app
+          if-no-files-found: error
