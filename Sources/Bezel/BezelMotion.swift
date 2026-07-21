@@ -1,4 +1,5 @@
 import SwiftUI
+import BezelCore
 
 /// Unified motion tokens — one spring curve across compact, list, detail, and board.
 enum BezelMotion {
