@@ -10,12 +10,28 @@ permissions:
 
 jobs:
   package:
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
 
-      - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+      - name: Select newest Xcode
+        run: |
+          ls /Applications | grep -i xcode || true
+          # Prefer Xcode_26 / latest that ships Swift 6.2+
+          for app in \
+            /Applications/Xcode_26.0.app \
+            /Applications/Xcode_26.app \
+            /Applications/Xcode-beta.app \
+            /Applications/Xcode.app
+          do
+            if [[ -d "$app" ]]; then
+              echo "Selecting $app"
+              sudo xcode-select -s "$app/Contents/Developer"
+              break
+            fi
+          done
+          xcodebuild -version
+          swift --version
 
       - name: swift test
         run: swift test
@@ -23,9 +39,14 @@ jobs:
       - name: Package Bezel.app
         run: bash scripts/package-bezel.sh
 
-      - name: Upload Bezel.app zip
+      - name: Zip app for download
+        run: |
+          cd dist
+          ditto -c -k --sequesterRsrc --keepParent Bezel.app Bezel.app.zip
+
+      - name: Upload Bezel.app.zip
         uses: actions/upload-artifact@v4
         with:
           name: Bezel.app
-          path: dist/Bezel.app
+          path: dist/Bezel.app.zip
           if-no-files-found: error
