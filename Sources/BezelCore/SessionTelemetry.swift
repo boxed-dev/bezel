@@ -125,12 +125,11 @@ public enum SessionTelemetry {
     }
 
     private static func todos(from obj: [String: Any]) -> [SessionTodo]? {
-        let arrays: [[Any]]? = (obj["todos"] as? [[Any]])
-            ?? (obj["todo_list"] as? [[Any]])
+        let arrays: [[String: Any]]? = (obj["todos"] as? [[String: Any]])
+            ?? (obj["todo_list"] as? [[String: Any]])
         guard let arrays, !arrays.isEmpty else { return nil }
         var out: [SessionTodo] = []
-        for item in arrays {
-            guard let dict = item as? [String: Any] else { continue }
+        for dict in arrays {
             let label = (dict["content"] as? String)
                 ?? (dict["label"] as? String)
                 ?? (dict["text"] as? String)
