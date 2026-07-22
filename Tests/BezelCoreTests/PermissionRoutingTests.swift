@@ -76,6 +76,54 @@ struct PermissionRoutingTests {
         #expect(kind == .event)
         #expect(!PermissionRouting.isBlocking(kind))
     }
+
+    /// Dual-routing invariant: Claude blocking rules are identical for all first-class sources.
+    @Test(
+        "source matrix preserves Claude routing",
+        arguments: ["claude", "codex", "opencode", "cursor"]
+    )
+    func sourceMatrixPreservesClaudeRules(source: String) {
+        #expect(
+            PermissionRouting.routeKind(
+                hookEventName: "PermissionRequest",
+                toolName: "Bash",
+                source: source,
+                question: nil
+            ) == .permission
+        )
+        #expect(
+            PermissionRouting.routeKind(
+                hookEventName: "PreToolUse",
+                toolName: "AskUserQuestion",
+                source: source,
+                question: nil
+            ) == .question
+        )
+        #expect(
+            PermissionRouting.routeKind(
+                hookEventName: "PreToolUse",
+                toolName: "ExitPlanMode",
+                source: source,
+                question: nil
+            ) == .permission
+        )
+        #expect(
+            PermissionRouting.routeKind(
+                hookEventName: "PreToolUse",
+                toolName: "Bash",
+                source: source,
+                question: nil
+            ) == .event
+        )
+        #expect(
+            PermissionRouting.routeKind(
+                hookEventName: "Notification",
+                toolName: nil,
+                source: source,
+                question: "needs attention"
+            ) == .event
+        )
+    }
 }
 
 @Suite("Event normalizer")

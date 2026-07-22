@@ -21,6 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hookServer: HookServer?
     private var notchController: NotchController?
     private var usageMonitor: UsageMonitor?
+    private var sessionDiscoveryMonitor: SessionDiscoveryMonitor?
     private var statusItem: NSStatusItem?
     private var globalHotkeyMonitor: Any?
     private var localHotkeyMonitor: Any?
@@ -76,6 +77,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         usageMonitor = usage
         usage.start()
 
+        let discovery = SessionDiscoveryMonitor(store: store)
+        sessionDiscoveryMonitor = discovery
+        discovery.start()
+
         // Keep Claude statusLine → ~/.bezel/cache/rl.json bridge alive.
         ConfigInstaller.injectStatusLineUsageBridge()
 
@@ -111,6 +116,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         localHotkeyMonitor = nil
         usageMonitor?.stop()
         usageMonitor = nil
+        sessionDiscoveryMonitor?.stop()
+        sessionDiscoveryMonitor = nil
         hookServer?.stop()
         store.setHookServerListening(false)
         notchController?.stop()

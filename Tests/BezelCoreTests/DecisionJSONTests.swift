@@ -77,6 +77,17 @@ struct DecisionJSONTests {
         #expect(hook?["permissionDecisionReason"] as? String == "Timed out")
     }
 
+    /// Decision bytes are source-agnostic — same allow shape for every agent.
+    @Test(
+        "permission allow identical across sources",
+        arguments: ["claude", "codex", "opencode", "cursor"]
+    )
+    func permissionAllowIdenticalAcrossSources(source: String) throws {
+        _ = source
+        let fixture = try loadFixture("permission-allow")
+        #expect(JSONCanonical.equal(DecisionJSON.permissionAllow(), fixture))
+    }
+
     private func loadFixture(_ name: String) throws -> Data {
         let url = Bundle.module.url(forResource: name, withExtension: "json", subdirectory: "decisions")
             ?? Bundle.module.url(forResource: name, withExtension: "json")

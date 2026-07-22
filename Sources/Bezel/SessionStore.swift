@@ -63,7 +63,7 @@ final class SessionStore {
     /// Highest-priority / oldest decision currently needing attention.
     var attentionHead: DecisionEntry? { decisionQueue.head }
 
-    /// Highest-priority session for compact trailing click-to-jump.
+    /// Highest-priority session (attention head, else live by phase). Jump is secondary UX only.
     var neediestSession: Session? {
         if let head = attentionHead,
            let session = sessions.first(where: { $0.id == head.key.sessionID })
@@ -182,7 +182,7 @@ final class SessionStore {
         }
         var enriched = next
         if let hint = TerminalHintExtractor.fromHookJSON(envelope.rawJSON) {
-            // Merge — never wipe a good ITERM_SESSION_ID/tty when a later hook lacks it.
+            // Merge on every event: fresh tty/session/pid win; omitted keys keep prior.
             enriched.terminal = (next.terminal ?? TerminalHint()).merging(hint)
         }
         upsert(enriched)
@@ -359,8 +359,26 @@ final class SessionStore {
     }
 
     func jump(to session: Session) {
-        _ = FlowStatsStore.recordJump()
+        // FlowStats stripped from product surface — jump is capability only, no counters.
         TerminalJumper.jump(session: session)
+    }
+
+    /// Merge Codex/OpenCode discovery rows. Hook-owned phase wins (AgentEventIngester).
+    /// Empty `discovered` still runs so stale discovery-idle rows can be pruned.
+    /// Respects SessionEnd tombstones so discovery cannot resurrect ended rows.
+    func mergeDiscovered(_ discovered: [Session]) {
+        pruneTombstones()
+        let byID = Dictionary(uniqueKeysWithValues: sessions.map { ($0.id, $0) })
+        let before = byID
+        let tombstoned = Set(endedAt.keys)
+        let merged = AgentEventIngester.mergeDiscovery(
+            discovered: discovered,
+            into: byID,
+            tombstonedIDs: tombstoned
+        )
+        guard merged != before else { return }
+        sessions = merged.values.sorted { $0.updatedAt > $1.updatedAt }
+        presenceEpoch &+= 1
     }
 
     // MARK: - Private

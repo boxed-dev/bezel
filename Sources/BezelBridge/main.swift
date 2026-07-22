@@ -43,31 +43,16 @@ enum BezelBridgeMain {
             exit(0)
         }
 
-        // Capture vendor event name before PascalCase normalization (Cursor inference needs it).
-        let rawEventName = (obj["hook_event_name"] as? String)
-            ?? (obj["hookEventName"] as? String)
-            ?? eventOverride
-
-        if let eventOverride {
-            obj["hook_event_name"] = EventNormalizer.pascalCase(eventOverride)
-        } else if let existing = obj["hook_event_name"] as? String {
-            obj["hook_event_name"] = EventNormalizer.pascalCase(existing)
-        } else if let existing = obj["hookEventName"] as? String {
-            obj["hook_event_name"] = EventNormalizer.pascalCase(existing)
-        }
-
         let env = ProcessInfo.processInfo.environment
-        // Cursor-shaped vendor events win over `--source claude` from a shared hook script.
-        let explicitSource = sourceOverride ?? (obj["_source"] as? String)
-        if let resolved = AgentSource.resolve(raw: explicitSource, hookEventName: rawEventName),
-           resolved != .unknown
-        {
-            obj["_source"] = resolved.rawValue
-        } else if obj["_source"] == nil {
-            obj["_source"] = explicitSource ?? "claude"
-        }
+        HookEventEnrichment.applySourceAndEvent(
+            to: &obj,
+            sourceOverride: sourceOverride,
+            eventOverride: eventOverride
+        )
 
-        obj["_ppid"] = Int(getppid())
+        // Refresh on every hook event (SessionStart + PostToolUse + …) so Jump
+        // never relies on a once-and-stale ITERM_SESSION_ID / tty / PPID.
+        let agentPID = Int(getppid())
         if obj["cwd"] == nil {
             obj["cwd"] = FileManager.default.currentDirectoryPath
         }
@@ -76,7 +61,8 @@ enum BezelBridgeMain {
         TerminalHintExtractor.merge(
             into: &obj,
             env: env,
-            tty: TerminalHintExtractor.resolveControllingTTY()
+            tty: TerminalHintExtractor.resolveControllingTTY(),
+            agentPID: agentPID
         )
 
         guard let enriched = try? JSONSerialization.data(withJSONObject: obj, options: []) else {

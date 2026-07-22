@@ -101,6 +101,18 @@ struct InstallerMergerHomeTests {
         #expect(ClaudeSettingsMerger.isBezelHookCommand("/Users/x/.bezel/bezel-hook.sh"))
     }
 
+    @Test func multiSourceHookCommands_emitSourceEnv() {
+        let hook = "$HOME/.bezel/bezel-hook.sh"
+        #expect(HookDispatcher.commandLine(source: .claude, hookPath: hook) == hook)
+        #expect(HookDispatcher.commandLine(source: .codex, hookPath: hook) == "BEZEL_SOURCE=codex \(hook)")
+        #expect(HookDispatcher.commandLine(source: .opencode, hookPath: hook) == "BEZEL_SOURCE=opencode \(hook)")
+        #expect(HookDispatcher.commandLine(source: .cursor, hookPath: hook) == "BEZEL_SOURCE=cursor \(hook)")
+        let script = HookDispatcher.script(bridgePath: "/Users/x/.bezel/bezel-bridge")
+        #expect(script.contains("BEZEL_SOURCE:-claude"))
+        #expect(!script.contains("--source claude \"")) // not hardcoded-only
+        #expect(script.contains("--source \"$SOURCE\""))
+    }
+
     @Test func uninstallScriptIdentityParity() {
         // Shared rules with scripts/uninstall-bezel.sh (no bare "bezel" substring).
         let cases: [(String, Bool)] = [

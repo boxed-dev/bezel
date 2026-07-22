@@ -42,4 +42,24 @@ struct DecisionTimeoutTests {
         _ = q.remove(key)
         #expect(q.head == nil)
     }
+
+    /// Timeout deny shape does not depend on which agent enqueued the permission.
+    @Test(
+        "permission timeout deny identical across sources",
+        arguments: ["claude", "codex", "opencode", "cursor"]
+    )
+    func permissionTimeoutDenyIdenticalAcrossSources(source: String) throws {
+        let entry = DecisionEntry(
+            key: DecisionKey(sessionID: SessionID("\(source)-s1"), requestID: "r1"),
+            kind: .permission,
+            summary: "Allow Bash?",
+            hookEventName: "PermissionRequest"
+        )
+        let data = DecisionTimeout.denyData(for: entry)
+        let root = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        let hook = root?["hookSpecificOutput"] as? [String: Any]
+        let decision = hook?["decision"] as? [String: Any]
+        #expect(decision?["behavior"] as? String == "deny")
+        #expect(decision?["message"] as? String == "Timed out")
+    }
 }

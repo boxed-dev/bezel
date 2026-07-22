@@ -84,4 +84,23 @@ struct UsageGlanceTests {
         let snap = ClaudeUsageSnapshot(source: "test")
         #expect(UsageGlance.compactText(snap) == nil)
     }
+
+    @Test func fiveHourOnlyHotShowsCountdown() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let snap = ClaudeUsageSnapshot(
+            fiveHour: ClaudeUsageWindow(usedPercent: 88, resetsAt: now.addingTimeInterval(30 * 60)),
+            source: "test"
+        )
+        #expect(UsageGlance.compactText(snap, now: now) == "88% · 30m")
+        #expect(UsageGlance.showsResetCountdown(snap))
+    }
+
+    @Test func hotWithoutResetsAtShowsBarePercent() {
+        let snap = ClaudeUsageSnapshot(
+            sevenDay: ClaudeUsageWindow(usedPercent: 95),
+            source: "test"
+        )
+        #expect(UsageGlance.compactText(snap) == "95%")
+        #expect(!UsageGlance.showsResetCountdown(snap))
+    }
 }

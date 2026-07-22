@@ -33,7 +33,7 @@ public struct HookPayload: Sendable {
             throw HookPayloadError.invalidJSON
         }
 
-        let event = string(in: obj, keys: [
+        let eventRaw = string(in: obj, keys: [
             "hook_event_name", "hookEventName", "eventName", "event",
         ]) ?? "Unknown"
 
@@ -50,7 +50,7 @@ public struct HookPayload: Sendable {
         // Cursor-shaped events win over a stale `_source=claude` stamp.
         let source = AgentSource.resolve(
             raw: string(in: obj, keys: ["_source", "source"]),
-            hookEventName: event
+            hookEventName: eventRaw
         )?.rawValue
         let question = string(in: obj, keys: ["question"])
         let sessionTitle = string(in: obj, keys: ["session_title", "sessionTitle"])
@@ -59,8 +59,15 @@ public struct HookPayload: Sendable {
         let toolDetail = toolDetail(from: obj)
         let telemetry = SessionTelemetry.parse(from: obj)
 
+        let eventName: String
+        if source == AgentSource.cursor.rawValue {
+            eventName = CursorAdapter.mapCursorEvent(eventRaw)
+        } else {
+            eventName = EventNormalizer.pascalCase(eventRaw)
+        }
+
         return HookPayload(
-            hookEventName: EventNormalizer.pascalCase(event),
+            hookEventName: eventName,
             sessionID: session,
             toolName: tool,
             cwd: cwd,
@@ -119,6 +126,7 @@ public struct HookPayload: Sendable {
     private static func firstWorkspaceRoot(_ obj: [String: Any]) -> String? {
         let roots = (obj["workspace_roots"] as? [String])
             ?? (obj["workspaceRoots"] as? [String])
+            ?? (obj["workspace_roots"] as? [Any])?.compactMap { $0 as? String }
         guard let root = roots?.first?.trimmingCharacters(in: .whitespacesAndNewlines),
               !root.isEmpty
         else { return nil }

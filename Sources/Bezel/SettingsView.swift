@@ -86,12 +86,30 @@ struct SettingsView: View {
                                 : result.message
                         }
                     }
-                    Button("Replace vibe-island / CodeIsland hooks") {
+                    Button("Install Codex hooks") {
                         Task {
-                            let result = await ConfigInstaller.replaceCompetingIslandHooks()
+                            let result = await ConfigInstaller.installCodexHooks()
                             hooksStatusOK = result.ok
                             hooksStatus = result.ok
-                                ? "Competing hooks removed; Bezel installed."
+                                ? "Codex hooks installed (~/.codex/hooks.json)."
+                                : result.message
+                        }
+                    }
+                    Button("Install Cursor hooks") {
+                        Task {
+                            let result = await ConfigInstaller.installCursorHooks()
+                            hooksStatusOK = result.ok
+                            hooksStatus = result.ok
+                                ? "Cursor hooks installed (~/.cursor/hooks.json)."
+                                : result.message
+                        }
+                    }
+                    Button("Connect all agents") {
+                        Task {
+                            let result = await ConfigInstaller.installConnectedAgentHooks()
+                            hooksStatusOK = result.ok
+                            hooksStatus = result.ok
+                                ? "Claude + Codex + Cursor hooks connected."
                                 : result.message
                         }
                     }
@@ -103,6 +121,24 @@ struct SettingsView: View {
                                 ? "Bezel hooks removed; will not reinstall on launch."
                                 : "Failed to remove Bezel hooks."
                         }
+                    }
+                    // Competing-island repair stays available but is not primary chrome (E3).
+                    DisclosureGroup("Repair competing hooks") {
+                        Text("Only if Connect fails because vibe-island or CodeIsland owns Claude hooks. Never runs automatically.")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                        Button("Replace vibe-island / CodeIsland hooks") {
+                            Task {
+                                let result = await ConfigInstaller.replaceCompetingIslandHooks()
+                                hooksStatusOK = result.ok
+                                hooksStatus = result.ok
+                                    ? "Competing hooks removed; Bezel installed."
+                                    : result.message
+                            }
+                        }
+                        .buttonStyle(.borderless)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
                     }
                     if !hooksStatus.isEmpty {
                         Label(hooksStatus, systemImage: hooksStatusOK ? "checkmark.circle.fill" : "exclamationmark.circle.fill")

@@ -23,4 +23,12 @@ struct TerminalHintMergeTests {
         #expect(merged.termProgram == "ghostty")
         #expect(merged.tty == "/dev/ttys002")
     }
+
+    @Test func adoptsFreshAgentPIDAndTermSession() {
+        let a = TerminalHint(termProgram: "Apple_Terminal", agentPID: 1)
+        let b = TerminalHint(termSessionID: "TERM-9", agentPID: 42)
+        let merged = a.merging(b)
+        #expect(merged.termSessionID == "TERM-9")
+        #expect(merged.agentPID == 42)
+    }
 }

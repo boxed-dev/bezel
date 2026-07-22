@@ -105,7 +105,9 @@ public enum ClaudeUsageParser {
     private static func date(_ value: Any?) -> Date? {
         switch value {
         case let n as Int:
-            return Date(timeIntervalSince1970: TimeInterval(n))
+            // Heuristic: ms vs s (same threshold as Double/NSNumber)
+            let seconds = n > 1_000_000_000_000 ? TimeInterval(n) / 1000 : TimeInterval(n)
+            return Date(timeIntervalSince1970: seconds)
         case let n as Double:
             // Heuristic: ms vs s
             return Date(timeIntervalSince1970: n > 1_000_000_000_000 ? n / 1000 : n)

@@ -79,6 +79,75 @@ enum ConfigInstaller {
         await installClaudeHooks()
     }
 
+    /// Install Codex hooks (`~/.codex/hooks.json`) with `BEZEL_SOURCE=codex`.
+    /// Requires bridge + hook script (same as Claude connect). No Gemini path.
+    static func installCodexHooks() async -> InstallResult {
+        if let prepError = prepareBridgeAndHookScript() {
+            return .failure(prepError)
+        }
+        let hook = HookDispatcher.commandLine(
+            source: .codex,
+            hookPath: ClaudeSettingsMerger.hookCommand
+        )
+        let url = URL(fileURLWithPath: BezelInstallState.homeDirectory())
+            .appendingPathComponent(".codex/hooks.json")
+        do {
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            let existing = try? Data(contentsOf: url)
+            let out = try CodexAdapter.mergeHooksJSON(existing: existing, hookCommand: hook)
+            try out.write(to: url, options: .atomic)
+            return .success
+        } catch {
+            NSLog("Bezel: Codex hooks install failed: \(error)")
+            return .failure("Could not write ~/.codex/hooks.json.")
+        }
+    }
+
+    /// Install Cursor hooks (`~/.cursor/hooks.json`) with `BEZEL_SOURCE=cursor`.
+    /// Activate/lifecycle only — no fake permission phases.
+    static func installCursorHooks() async -> InstallResult {
+        if let prepError = prepareBridgeAndHookScript() {
+            return .failure(prepError)
+        }
+        let hook = HookDispatcher.commandLine(
+            source: .cursor,
+            hookPath: ClaudeSettingsMerger.hookCommand
+        )
+        let url = URL(fileURLWithPath: BezelInstallState.homeDirectory())
+            .appendingPathComponent(".cursor/hooks.json")
+        do {
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            let existing = try? Data(contentsOf: url)
+            let out = try CursorAdapter.mergeBezelHooks(existing: existing, hookCommand: hook)
+            try out.write(to: url, options: .atomic)
+            return .success
+        } catch {
+            NSLog("Bezel: Cursor hooks install failed: \(error)")
+            return .failure("Could not write ~/.cursor/hooks.json.")
+        }
+    }
+
+    /// Connect / repair: Claude required; Codex + Cursor best-effort (presence also via discovery).
+    static func installConnectedAgentHooks() async -> InstallResult {
+        let claude = await installClaudeHooks()
+        guard claude.ok else { return claude }
+        let codex = await installCodexHooks()
+        let cursor = await installCursorHooks()
+        if !codex.ok {
+            NSLog("Bezel: Codex hooks optional install: \(codex.message)")
+        }
+        if !cursor.ok {
+            NSLog("Bezel: Cursor hooks optional install: \(cursor.message)")
+        }
+        return .success
+    }
+
     /// Strip vibe-island/CodeIsland hooks, then install Bezel. Explicit user action only.
     static func replaceCompetingIslandHooks() async -> InstallResult {
         if !stripCompetingClaudeSettings() {
@@ -287,18 +356,8 @@ enum ConfigInstaller {
 
     @discardableResult
     private static func writeHookScript(bridgePath: String) -> Bool {
-        // Production hook: bridge only. No nc fallback, no silent empty ack on miss.
-        let script = """
-        #!/bin/bash
-        # Bezel hook dispatcher — managed, do not edit
-        set -euo pipefail
-        BRIDGE="\(bridgePath)"
-        if [[ ! -x "$BRIDGE" ]]; then
-          echo "Bezel: bezel-bridge missing or not executable at $BRIDGE" >&2
-          exit 1
-        fi
-        exec "$BRIDGE" --source claude "$@"
-        """
+        // Production hook: bridge only. Source via BEZEL_SOURCE (default claude).
+        let script = HookDispatcher.script(bridgePath: bridgePath)
         let url = bezelHome.appendingPathComponent(BezelInstallState.hookFileName)
         do {
             try script.write(to: url, atomically: true, encoding: .utf8)
@@ -383,5 +442,26 @@ enum ConfigInstaller {
     private static var claudeSettingsURL: URL {
         URL(fileURLWithPath: BezelInstallState.homeDirectory())
             .appendingPathComponent(".claude/settings.json")
+    }
+
+    /// Shared prep for multi-source installers: probe socket, copy bridge, write hook script.
+    private static func prepareBridgeAndHookScript() -> String? {
+        guard SocketLiveness.probe() else {
+            return "Bezel socket not answering — is the app running?"
+        }
+        guard BezelInstallState.ensureBezelHome() else {
+            return "Could not create ~/.bezel with secure permissions."
+        }
+        guard let bridgeURL = locateBridgeBinary() else {
+            return "bezel-bridge missing from the app bundle."
+        }
+        if !installBridge(from: bridgeURL) {
+            return "Could not install bezel-bridge into ~/.bezel."
+        }
+        let dest = bezelHome.appendingPathComponent(BezelInstallState.bridgeFileName)
+        guard writeHookScript(bridgePath: dest.path) else {
+            return "Could not write ~/.bezel/bezel-hook.sh."
+        }
+        return nil
     }
 }

@@ -128,6 +128,30 @@ struct DecisionQueueTests {
         #expect(NotchSurfaceMapper.map(sessionCount: 0, headKind: nil) == .quiet)
     }
 
+    /// Cross-source permissions share one queue — head order is kind/age, not source.
+    @Test func crossSourcePermissionsShareQueue() {
+        var queue = DecisionQueue()
+        let claude = entry(
+            session: "claude-s",
+            request: "r1",
+            kind: .permission,
+            at: Date(timeIntervalSince1970: 10),
+            summary: "Claude Bash?"
+        )
+        let codex = entry(
+            session: "codex-s",
+            request: "r2",
+            kind: .permission,
+            at: Date(timeIntervalSince1970: 20),
+            summary: "Codex Edit?"
+        )
+        queue.enqueue(claude)
+        queue.enqueue(codex)
+        #expect(queue.entries.count == 2)
+        #expect(queue.head?.key.sessionID == SessionID("claude-s"))
+        #expect(queue.head?.kind == .permission)
+    }
+
     private func entry(
         session: String,
         request: String,

@@ -1,6 +1,7 @@
 import Foundation
 
-/// Local daily jump counter — persisted for future glance UI.
+/// Local daily jump counter — **deprecated / inert** (E1).
+/// Not used by notch/product paths; kept for file-format compatibility only. Do not bind to UI.
 public struct FlowDayStats: Equatable, Sendable, Codable {
     public var dayKey: String
     public var jumps: Int
@@ -19,6 +20,8 @@ public struct FlowDayStats: Equatable, Sendable, Codable {
     }
 }
 
+/// Jump stats store — **deprecated / inert** (E1).
+/// `SessionStore.jump` no longer calls `recordJump`. Do not reintroduce into product paths.
 public enum FlowStatsStore {
     public static let fileName = "flow-stats.json"
 

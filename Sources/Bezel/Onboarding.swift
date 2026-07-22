@@ -271,7 +271,7 @@ struct OnboardingRoot: View {
                         }
                         return
                     }
-                    let result = await ConfigInstaller.installClaudeHooks()
+                    let result = await ConfigInstaller.installConnectedAgentHooks()
                     withAnimation(.easeOut(duration: 0.3)) {
                         dispatch(.connectFinished(success: result.ok, status: result.message))
                     }

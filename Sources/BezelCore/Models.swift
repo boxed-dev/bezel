@@ -87,6 +87,10 @@ public struct TerminalHint: Codable, Sendable, Hashable {
     public var tmuxPane: String?
     public var kittyWindow: String?
     public var warpFocusURL: String?
+    /// Apple Terminal `TERM_SESSION_ID` (unique per tab shell).
+    public var termSessionID: String?
+    /// Agent / hook parent PID from bridge `getppid()` — refreshed every event.
+    public var agentPID: Int?
 
     public init(
         termProgram: String? = nil,
@@ -96,7 +100,9 @@ public struct TerminalHint: Codable, Sendable, Hashable {
         tmux: String? = nil,
         tmuxPane: String? = nil,
         kittyWindow: String? = nil,
-        warpFocusURL: String? = nil
+        warpFocusURL: String? = nil,
+        termSessionID: String? = nil,
+        agentPID: Int? = nil
     ) {
         self.termProgram = termProgram
         self.bundleID = bundleID
@@ -106,13 +112,21 @@ public struct TerminalHint: Codable, Sendable, Hashable {
         self.tmuxPane = tmuxPane
         self.kittyWindow = kittyWindow
         self.warpFocusURL = warpFocusURL
+        self.termSessionID = termSessionID
+        self.agentPID = agentPID
     }
 
     /// Prefer non-empty fields from `other`, keep ours when the new hook omitted them.
+    /// Fresh tty / session ids / agent PID from later hooks always win (anti-stale).
     public func merging(_ other: TerminalHint) -> TerminalHint {
         func pick(_ a: String?, _ b: String?) -> String? {
             if let b, !b.isEmpty { return b }
             if let a, !a.isEmpty { return a }
+            return nil
+        }
+        func pickPID(_ a: Int?, _ b: Int?) -> Int? {
+            if let b, b > 0 { return b }
+            if let a, a > 0 { return a }
             return nil
         }
         return TerminalHint(
@@ -123,7 +137,9 @@ public struct TerminalHint: Codable, Sendable, Hashable {
             tmux: pick(tmux, other.tmux),
             tmuxPane: pick(tmuxPane, other.tmuxPane),
             kittyWindow: pick(kittyWindow, other.kittyWindow),
-            warpFocusURL: pick(warpFocusURL, other.warpFocusURL)
+            warpFocusURL: pick(warpFocusURL, other.warpFocusURL),
+            termSessionID: pick(termSessionID, other.termSessionID),
+            agentPID: pickPID(agentPID, other.agentPID)
         )
     }
 
@@ -133,6 +149,8 @@ public struct TerminalHint: Codable, Sendable, Hashable {
             || (warpFocusURL?.isEmpty == false)
             || (kittyWindow?.isEmpty == false)
             || (tmuxPane?.isEmpty == false)
+            || (termSessionID?.isEmpty == false)
+            || (agentPID ?? 0) > 0
             || (termProgram?.isEmpty == false)
             || (bundleID?.isEmpty == false)
     }

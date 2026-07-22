@@ -48,29 +48,26 @@ final class UsageMonitor {
     }
 
     func refreshFromDisk() {
-        // Prefer Bezel cache; fall back to Vibe Island’s if present (same Claude statusLine data).
-        var candidates: [(ClaudeUsageSnapshot, Date)] = []
-        if let snap = ClaudeUsagePath.loadCached() {
-            candidates.append((snap, snap.fetchedAt))
-        }
+        // Bezel statusLine/OAuth cache is primary. vibe-island is last-resort only when Bezel missing.
+        let bezel = ClaudeUsagePath.loadCached()
+        var vibeIsland: ClaudeUsageSnapshot?
         let vibeURL = URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent(".vibe-island/cache/rl.json")
-        if let data = try? Data(contentsOf: vibeURL),
-           let snap = ClaudeUsageParser.parse(data, source: "vibe-island-cache"),
-           let mtime = (try? vibeURL.resourceValues(forKeys: [.contentModificationDateKey]))
-            .flatMap(\.contentModificationDate)
+        if bezel == nil,
+           let data = try? Data(contentsOf: vibeURL),
+           let snap = ClaudeUsageParser.parse(data, source: "vibe-island-cache")
         {
-            candidates.append((
-                ClaudeUsageSnapshot(
-                    fiveHour: snap.fiveHour,
-                    sevenDay: snap.sevenDay,
-                    fetchedAt: mtime,
-                    source: snap.source
-                ),
-                mtime
-            ))
+            let mtime = (try? vibeURL.resourceValues(forKeys: [.contentModificationDateKey]))
+                .flatMap(\.contentModificationDate) ?? snap.fetchedAt
+            vibeIsland = ClaudeUsageSnapshot(
+                fiveHour: snap.fiveHour,
+                sevenDay: snap.sevenDay,
+                fetchedAt: mtime,
+                source: snap.source
+            )
         }
-        guard let best = candidates.max(by: { $0.1 < $1.1 })?.0 else { return }
+        guard let best = UsageSourcePolicy.selectDiskSnapshot(bezel: bezel, vibeIsland: vibeIsland)
+        else { return }
         store.applyUsage(best)
     }
 

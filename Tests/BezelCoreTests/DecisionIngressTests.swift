@@ -44,4 +44,21 @@ struct DecisionIngressTests {
         #expect(p.routeKind == .event)
         #expect(DecisionIngress.attention(for: p) == nil)
     }
+
+    /// Ingress attention kind is identical when `_source` is a non-Claude first-class agent.
+    @Test(
+        "permission ingress identical across sources",
+        arguments: ["claude", "codex", "opencode", "cursor"]
+    )
+    func permissionIngressIdenticalAcrossSources(source: String) throws {
+        let json = """
+        {"hook_event_name":"PermissionRequest","session_id":"s1","tool_name":"Bash","_source":"\(source)"}
+        """
+        let p = try HookPayload.parse(Data(json.utf8))
+        #expect(p.source == source)
+        #expect(p.routeKind == .permission)
+        let a = DecisionIngress.attention(for: p)
+        #expect(a?.kind == .permission)
+        #expect(a?.toolName == "Bash")
+    }
 }

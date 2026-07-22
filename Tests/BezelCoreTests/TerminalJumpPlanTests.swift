@@ -54,9 +54,22 @@ struct TerminalJumpPlanTests {
         #expect(TerminalJumpPlan.plan(for: hint) == .activateOnly)
     }
 
-    @Test func cursorIsActivateOnly() {
+    @Test func cursorWithoutWorkspaceIsActivateOnly() {
         let hint = TerminalHint(termProgram: "vscode", bundleID: "com.todesktop.230313mzl4w4u92")
         #expect(TerminalJumpPlan.plan(for: hint) == .activateOnly)
+        #expect(TerminalJumpPlan.plan(for: hint, cwd: nil) == .activateOnly)
+    }
+
+    @Test func cursorWithWorkspaceUsesIDEWorkspace() {
+        // Honest best-effort: workspace reopen via CLI — not a terminal tab/pane.
+        let hint = TerminalHint(termProgram: "vscode", bundleID: "com.todesktop.230313mzl4w4u92")
+        #expect(TerminalJumpPlan.plan(for: hint, cwd: "/Users/dev/proj") == .ideWorkspace)
+    }
+
+    @Test func ghosttyWithTTYStillGhosttyFocus() {
+        let hint = TerminalHint(termProgram: "ghostty", tty: "/dev/ttys003")
+        #expect(TerminalJumpPlan.plan(for: hint) == .ghosttyFocus)
+        #expect(TerminalJumpMatch.isPreciseSurfaceJump(hint))
     }
 
     @Test func kittyWindow() {
